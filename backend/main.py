@@ -8,7 +8,7 @@ import time
 import sys
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +36,13 @@ load_env_local()
 
 DEFAULT_ENCRYPTION_KEY = b"fW8kZ2dUbWRKMWNmU0xYQzh6cDVxZ2M0djhkZ2hqa2w="
 SYSTEM_SECRET = os.getenv("SYSTEM_SECRET", "auric_secret_system_token_2026")
+
+# MT5 Available check
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
 
 def get_fernet():
     key = os.getenv("ENCRYPTION_KEY", "")
@@ -101,59 +108,294 @@ async def fetch_all_cloud_broker_accounts():
         return [d for d in res if d.get("credentials_enc")]
     return []
 
-active_bridge_processes: Dict[str, asyncio.subprocess.Process] = {}
+# Direct MT5 loops inside FastAPI
+active_direct_loops = {}      # user_id -> asyncio.Task
+active_mock_positions = {}    # user_id -> List[dict]
+direct_loop_mock = {}         # user_id -> bool
+latest_prices = {}
+active_accounts = {}
 
-async def start_user_bridge(user_id: str, login: int, password: str, server: str, token: str, mock: bool = False):
-    await stop_user_bridge(user_id)
-    
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    bridge_path = os.path.abspath(os.path.join(current_dir, "..", "bridge", "bridge.py"))
-    
-    cmd = [
-        sys.executable,
-        bridge_path,
-        "--token", token,
-        "--ws-url", "ws://localhost:8000/ws/bridge",
-        "--login", str(login),
-        "--password", password,
-        "--server", server
-    ]
-    if mock:
-        cmd.append("--mock")
-        
-    print(f"Starting cloud bridge subprocess for user {user_id}...")
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        active_bridge_processes[user_id] = process
-        asyncio.create_task(log_process_output(user_id, process))
-        return True
-    except Exception as e:
-        print(f"Error launching bridge subprocess for user {user_id}: {e}")
-        return False
-        
-async def stop_user_bridge(user_id: str):
-    process = active_bridge_processes.pop(user_id, None)
-    if process:
-        print(f"Stopping cloud bridge subprocess for user {user_id}")
-        try:
-            process.terminate()
-            await process.wait()
-        except Exception as e:
-            print(f"Error terminating bridge process: {e}")
+async def sync_mt5_history(user_id: str, login: int, password: str, server: str, mock: bool):
+    if mock or not MT5_AVAILABLE:
+        # Seeding mock trades if Supabase table is empty
+        res = await asyncio.to_thread(supabase_request, "GET", f"trades?user_id=eq.{user_id}&limit=1")
+        if not res or len(res) == 0:
+            print(f"[SyncHistory] Seeding mock historical trades for user {user_id}...")
+            strategies = ["order_block_reversal", "fvg_scalper", "trend_following", "liquidity_sweep"]
+            sessions = ["London", "New York", "Asia"]
             
-async def log_process_output(user_id: str, process):
+            for i in range(15):
+                d = datetime.now() - timedelta(days=(15 - i) + random.uniform(-0.2, 0.2))
+                direction = random.choice(["BUY", "SELL"])
+                lots = random.choice([0.01, 0.02, 0.05])
+                open_price = 1930.0 + random.uniform(-20, 20)
+                is_win = random.random() < 0.6
+                pnl_r = random.uniform(1.2, 3.5) if is_win else random.uniform(-1.0, -1.0)
+                pnl_usd = round(pnl_r * lots * 1000, 2)
+                close_price = open_price + (pnl_usd / (lots * 100)) if direction == "BUY" else open_price - (pnl_usd / (lots * 100))
+                
+                trade = {
+                    "user_id": user_id,
+                    "mt5_ticket": random.randint(100000, 999999),
+                    "pair": "XAUUSD",
+                    "direction": direction,
+                    "lots": lots,
+                    "open_price": round(open_price, 2),
+                    "close_price": round(close_price, 2),
+                    "pnl_usd": pnl_usd,
+                    "pnl_r": round(pnl_r, 2),
+                    "commission": -0.07,
+                    "swap": 0.0,
+                    "strategy": random.choice(strategies),
+                    "session": random.choice(sessions),
+                    "status": "closed",
+                    "opened_at": d.isoformat(),
+                    "closed_at": (d + timedelta(hours=random.randint(1, 8))).isoformat()
+                }
+                await asyncio.to_thread(supabase_request, "POST", "trades", trade)
+            print("[SyncHistory] Completed seeding mock trades.")
+        return
+
+    # Real MT5 History Sync
+    if not mt5.initialize(login=login, password=password, server=server):
+        print(f"[SyncHistory] MT5 init failed for history sync: {mt5.last_error()}")
+        return
+
+    from_date = datetime(2020, 1, 1)
+    to_date = datetime.now()
+    deals = mt5.history_deals_get(from_date, to_date)
+    if not deals:
+        print("[SyncHistory] No historical deals found on MT5 terminal.")
+        return
+
+    # Group deals by position_id
+    positions = {}
+    for deal in deals:
+        deal_dict = deal._asdict() if hasattr(deal, "_asdict") else dict(deal)
+        pos_id = deal_dict.get("position_id")
+        if not pos_id:
+            continue
+        positions.setdefault(pos_id, []).append(deal_dict)
+
+    reconstructed_count = 0
+    for pos_id, pos_deals in positions.items():
+        entry_deal = next((d for d in pos_deals if d.get("entry") == 0), None)
+        exit_deal = next((d for d in pos_deals if d.get("entry") == 1), None)
+
+        if not entry_deal:
+            continue
+
+        direction = "BUY" if entry_deal.get("type") == 0 else "SELL"
+        lots = entry_deal.get("volume", 0.01)
+        open_price = entry_deal.get("price")
+        opened_at = datetime.fromtimestamp(entry_deal.get("time")).isoformat()
+
+        close_price = None
+        closed_at = None
+        pnl_usd = 0.0
+        commission = 0.0
+        swap = 0.0
+
+        if exit_deal:
+            close_price = exit_deal.get("price")
+            closed_at = datetime.fromtimestamp(exit_deal.get("time")).isoformat()
+            pnl_usd = exit_deal.get("profit", 0.0) + exit_deal.get("commission", 0.0) + exit_deal.get("swap", 0.0)
+            commission = exit_deal.get("commission", 0.0)
+            swap = exit_deal.get("swap", 0.0)
+
+        trade = {
+            "user_id": user_id,
+            "mt5_ticket": pos_id,
+            "pair": entry_deal.get("symbol"),
+            "direction": direction,
+            "lots": lots,
+            "open_price": open_price,
+            "close_price": close_price,
+            "pnl_usd": pnl_usd,
+            "pnl_r": round(pnl_usd / 10.0, 2),
+            "commission": commission,
+            "swap": swap,
+            "strategy": "MT5 Automated Trade",
+            "session": "N/A",
+            "status": "closed" if exit_deal else "OPEN",
+            "opened_at": opened_at,
+            "closed_at": closed_at
+        }
+        await asyncio.to_thread(supabase_request, "POST", "trades", trade)
+        reconstructed_count += 1
+
+    print(f"[SyncHistory] Reconstructed and upserted {reconstructed_count} trades from MT5 deals.")
+
+async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: str, mock: bool):
+    print(f"[DirectEngine] Starting direct MT5 engine loop for user {user_id} (Mock={mock})...")
+    
+    try:
+        await sync_mt5_history(user_id, login, password, server, mock)
+    except Exception as e:
+        print(f"[DirectEngine] Error syncing history: {e}")
+        
+    mock_bid = 1950.0
+    mock_ask = 1950.5
+    
+    is_real_mt5 = not mock and MT5_AVAILABLE
+    if is_real_mt5:
+        if not mt5.initialize(login=login, password=password, server=server):
+            print(f"[DirectEngine] MT5 initialization failed: {mt5.last_error()}")
+            is_real_mt5 = False
+            
+    terminal_symbol = "XAUUSD"
+    if is_real_mt5:
+        if mt5.symbol_select(terminal_symbol, True):
+            pass
+        else:
+            symbols = mt5.symbols_get()
+            if symbols:
+                matches = [s for s in symbols if terminal_symbol.upper() in s.name.upper()]
+                for s in matches:
+                    if getattr(s, 'trade_mode', 4) != 0:
+                        if mt5.symbol_select(s.name, True):
+                            terminal_symbol = s.name
+                            break
+        print(f"[DirectEngine] Resolved symbol: {terminal_symbol}")
+        
+    counter = 0
     try:
         while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            print(f"[CloudBridge-{user_id}]: {line.decode().strip()}")
-    except Exception as e:
-        print(f"Error reading bridge logs for {user_id}: {e}")
+            counter += 1
+            # 1. Price streams
+            if is_real_mt5:
+                tick = mt5.symbol_info_tick(terminal_symbol)
+                if tick:
+                    price_data = {
+                        "type": "price",
+                        "pair": "XAUUSD",
+                        "bid": tick.bid,
+                        "ask": tick.ask,
+                        "time": int(tick.time_msc)
+                    }
+                    if redis_client:
+                        await redis_client.publish(f"bridge:{user_id}", json.dumps(price_data))
+                    else:
+                        await client_manager.send_message(user_id, price_data)
+                    latest_prices["XAUUSD"] = {"bid": tick.bid, "ask": tick.ask}
+            else:
+                change = random.uniform(-0.4, 0.4)
+                mock_bid = round(mock_bid + change, 2)
+                mock_ask = round(mock_bid + 0.5, 2)
+                price_data = {
+                    "type": "price",
+                    "pair": "XAUUSD",
+                    "bid": mock_bid,
+                    "ask": mock_ask,
+                    "time": int(datetime.now().timestamp() * 1000)
+                }
+                if redis_client:
+                    await redis_client.publish(f"bridge:{user_id}", json.dumps(price_data))
+                else:
+                    await client_manager.send_message(user_id, price_data)
+                latest_prices["XAUUSD"] = {"bid": mock_bid, "ask": mock_ask}
+
+            # 2. Position updates (every 2.0s)
+            if counter % 4 == 0:
+                if is_real_mt5:
+                    positions = mt5.positions_get()
+                    data = []
+                    if positions:
+                        for p in positions:
+                            p_dict = p._asdict() if hasattr(p, "_asdict") else dict(p)
+                            data.append({
+                                "ticket": p_dict.get("ticket"),
+                                "symbol": p_dict.get("symbol"),
+                                "type": "BUY" if p_dict.get("type") == 0 else "SELL",
+                                "volume": p_dict.get("volume"),
+                                "open_price": p_dict.get("price_open"),
+                                "current_price": p_dict.get("price_current"),
+                                "profit": p_dict.get("profit")
+                            })
+                    acc_info = mt5.account_info()
+                    balance = acc_info.balance if acc_info else 10000.0
+                    equity = acc_info.equity if acc_info else 10000.0
+                    
+                    pos_data = {
+                        "type": "positions",
+                        "data": data,
+                        "balance": balance,
+                        "equity": equity
+                    }
+                    if redis_client:
+                        await redis_client.publish(f"bridge:{user_id}", json.dumps(pos_data))
+                        status_data = {
+                            "connected": True,
+                            "last_seen": datetime.now().isoformat(),
+                            "balance": balance,
+                            "equity": equity
+                        }
+                        await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
+                    else:
+                        await client_manager.send_message(user_id, pos_data)
+                    active_accounts[user_id] = {
+                        "balance": balance,
+                        "equity": equity,
+                        "last_seen": datetime.now().isoformat()
+                    }
+                else:
+                    mock_pos = active_mock_positions.setdefault(user_id, [])
+                    for p in mock_pos:
+                        entry = p["open_price"]
+                        direction = p["type"]
+                        current = mock_ask if direction == "BUY" else mock_bid
+                        diff = (current - entry) if direction == "BUY" else (entry - current)
+                        p["current_price"] = current
+                        p["profit"] = round(diff * p["volume"] * 100, 2)
+                        
+                    tot_pnl = sum(p["profit"] for p in mock_pos)
+                    balance = 10000.0
+                    equity = round(balance + tot_pnl, 2)
+                    
+                    pos_data = {
+                        "type": "positions",
+                        "data": mock_pos,
+                        "balance": balance,
+                        "equity": equity
+                    }
+                    if redis_client:
+                        await redis_client.publish(f"bridge:{user_id}", json.dumps(pos_data))
+                        status_data = {
+                            "connected": True,
+                            "last_seen": datetime.now().isoformat(),
+                            "balance": balance,
+                            "equity": equity
+                        }
+                        await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
+                    else:
+                        await client_manager.send_message(user_id, pos_data)
+                    active_accounts[user_id] = {
+                        "balance": balance,
+                        "equity": equity,
+                        "last_seen": datetime.now().isoformat()
+                    }
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        print(f"[DirectEngine] Direct MT5 engine loop cancelled for user {user_id}")
+        if is_real_mt5:
+            mt5.shutdown()
+
+async def start_direct_user_bridge(user_id: str, login: int, password: str, server: str, mock: bool):
+    await stop_direct_user_bridge(user_id)
+    direct_loop_mock[user_id] = mock
+    task = asyncio.create_task(run_direct_mt5_loop(user_id, login, password, server, mock))
+    active_direct_loops[user_id] = task
+    return True
+
+async def stop_direct_user_bridge(user_id: str):
+    task = active_direct_loops.pop(user_id, None)
+    if task:
+        print(f"[DirectEngine] Stopping direct loop task for user {user_id}")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 async def auto_start_bridges():
     print("Auto-starting cloud bridges for active broker accounts...")
@@ -166,8 +408,8 @@ async def auto_start_bridges():
         
         password = decrypt_password(encrypted_pw)
         if password and user_id and login and server:
-            system_token = f"system_cloud_bridge_{user_id}_{SYSTEM_SECRET}"
-            await start_user_bridge(user_id, login, password, server, system_token, mock=False)
+            is_mock = not MT5_AVAILABLE
+            await start_direct_user_bridge(user_id, login, password, server, mock=is_mock)
 
 app = FastAPI(title="AURIC PRO FastAPI Service")
 
@@ -400,6 +642,178 @@ async def bridge_endpoint(websocket: WebSocket):
         listener_task.cancel()
         bridge_manager.disconnect(user_id)
 
+def send_order_with_filling_fallback(request):
+    if not MT5_AVAILABLE:
+        return None
+    filling_modes = [
+        mt5.ORDER_FILLING_FOK,
+        mt5.ORDER_FILLING_IOC,
+        mt5.ORDER_FILLING_RETURN
+    ]
+    last_result = None
+    for fill_mode in filling_modes:
+        request["type_filling"] = fill_mode
+        last_result = mt5.order_send(request)
+        if last_result and last_result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]:
+            print(f"MT5 Order executed successfully with filling mode: {fill_mode}")
+            return last_result
+        else:
+            ret_code = last_result.retcode if last_result else 'Unknown'
+            print(f"MT5 Order failed with filling mode {fill_mode}: retcode={ret_code}")
+    return last_result
+
+def execute_real_trade(cmd):
+    if not MT5_AVAILABLE:
+        return
+    symbol = cmd.get("pair", "XAUUSD")
+    direction = cmd.get("direction", "BUY")
+    lots = cmd.get("lots", 0.01)
+    
+    terminal_symbol = symbol
+    if mt5.symbol_select(terminal_symbol, True):
+        pass
+    else:
+        symbols = mt5.symbols_get()
+        if symbols:
+            matches = [s for s in symbols if symbol.upper() in s.name.upper()]
+            for s in matches:
+                if getattr(s, 'trade_mode', 4) != 0:
+                    if mt5.symbol_select(s.name, True):
+                        terminal_symbol = s.name
+                        break
+                        
+    info = mt5.symbol_info(terminal_symbol)
+    if not info:
+        print(f"Error: Symbol {terminal_symbol} not found on server.")
+        return
+        
+    action_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
+    price = mt5.symbol_info_tick(terminal_symbol).ask if direction == "BUY" else mt5.symbol_info_tick(terminal_symbol).bid
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": terminal_symbol,
+        "volume": lots,
+        "type": action_type,
+        "price": price,
+        "sl": float(cmd["sl"]) if cmd.get("sl") else 0.0,
+        "tp": float(cmd["tp"]) if cmd.get("tp") else 0.0,
+        "deviation": 20,
+        "magic": 202400,
+        "comment": "AURIC Cloud Trade Direct",
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+    
+    result = send_order_with_filling_fallback(request)
+    print(f"MT5 final execution result: {result}")
+
+async def execute_direct_command(user_id: str, cmd: dict, is_mock: bool):
+    cmd_type = cmd.get("type")
+    print(f"[DirectEngine] Received command for user {user_id}: {cmd} (Mock={is_mock})")
+    
+    if is_mock or not MT5_AVAILABLE:
+        if cmd_type == "open_trade":
+            ticket = random.randint(100000, 999999)
+            latest = latest_prices.get("XAUUSD", {"bid": 1950.0, "ask": 1950.5})
+            direction = cmd.get("direction", "BUY")
+            price = latest["ask"] if direction == "BUY" else latest["bid"]
+            pos = {
+                "ticket": ticket,
+                "symbol": "XAUUSD",
+                "type": direction,
+                "volume": cmd.get("lots", 0.01),
+                "open_price": price,
+                "current_price": price,
+                "profit": 0.0,
+                "sl": cmd.get("sl"),
+                "tp": cmd.get("tp")
+            }
+            active_mock_positions.setdefault(user_id, []).append(pos)
+            print(f"[DirectMock-{user_id}] Opened trade: {pos}")
+            
+        elif cmd_type == "close_trade":
+            ticket = cmd.get("ticket")
+            positions = active_mock_positions.get(user_id, [])
+            closed = [p for p in positions if p["ticket"] == ticket]
+            active_mock_positions[user_id] = [p for p in positions if p["ticket"] != ticket]
+            
+            if closed:
+                c = closed[0]
+                latest = latest_prices.get("XAUUSD", {"bid": 1950.0, "ask": 1950.5})
+                close_price = latest["bid"] if c["type"] == "BUY" else latest["ask"]
+                diff = (close_price - c["open_price"]) if c["type"] == "BUY" else (c["open_price"] - close_price)
+                pnl = round(diff * c["volume"] * 100, 2)
+                
+                trade_record = {
+                    "user_id": user_id,
+                    "mt5_ticket": ticket,
+                    "pair": "XAUUSD",
+                    "direction": c["type"],
+                    "lots": c["volume"],
+                    "open_price": c["open_price"],
+                    "close_price": close_price,
+                    "pnl_usd": pnl,
+                    "pnl_r": round(pnl / 10.0, 2),
+                    "commission": -0.07,
+                    "swap": 0.0,
+                    "strategy": "order_block_reversal",
+                    "session": "New York",
+                    "status": "closed",
+                    "opened_at": datetime.now().isoformat(),
+                    "closed_at": datetime.now().isoformat()
+                }
+                await asyncio.to_thread(supabase_request, "POST", "trades", trade_record)
+                print(f"[DirectMock-{user_id}] Closed trade: {trade_record}")
+                
+        elif cmd_type == "modify_trade":
+            ticket = cmd.get("ticket")
+            sl = cmd.get("sl")
+            tp = cmd.get("tp")
+            for p in active_mock_positions.setdefault(user_id, []):
+                if p["ticket"] == ticket:
+                    if sl is not None: p["sl"] = sl
+                    if tp is not None: p["tp"] = tp
+                    print(f"[DirectMock-{user_id}] Modified trade {ticket}: sl={sl}, tp={tp}")
+    else:
+        if cmd_type == "open_trade":
+            execute_real_trade(cmd)
+        elif cmd_type == "close_trade":
+            ticket = cmd.get("ticket")
+            positions = mt5.positions_get(ticket=ticket)
+            if positions:
+                pos = positions[0]
+                symbol = pos.symbol
+                lots = pos.volume
+                action_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+                price = mt5.symbol_info_tick(symbol).bid if pos.type == 0 else mt5.symbol_info_tick(symbol).ask
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": symbol,
+                    "volume": lots,
+                    "type": action_type,
+                    "position": ticket,
+                    "price": price,
+                    "deviation": 20,
+                    "magic": 202400,
+                    "comment": "AURIC Close Trade Direct",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                }
+                send_order_with_filling_fallback(request)
+        elif cmd_type == "modify_trade":
+            ticket = cmd.get("ticket")
+            sl = cmd.get("sl")
+            tp = cmd.get("tp")
+            positions = mt5.positions_get(ticket=ticket)
+            if positions:
+                pos = positions[0]
+                request = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "position": ticket,
+                    "sl": float(sl) if sl else pos.sl,
+                    "tp": float(tp) if tp else pos.tp
+                }
+                mt5.order_send(request)
+
 @app.websocket("/ws/client")
 async def client_endpoint(websocket: WebSocket):
     headers = websocket.headers
@@ -417,10 +831,10 @@ async def client_endpoint(websocket: WebSocket):
     await client_manager.connect(user_id, websocket)
     try:
         while True:
-            # Receive commands from Next.js Node client (open_trade, close_trade, etc.)
             cmd = await websocket.receive_json()
-            # Forward directly to the MT5 bridge client WebSocket connection
-            await bridge_manager.send_command(user_id, cmd)
+            # Intercept commands and execute them directly via in-process loops
+            is_mock = direct_loop_mock.get(user_id, True)
+            await execute_direct_command(user_id, cmd, is_mock)
     except WebSocketDisconnect:
         pass
     finally:
@@ -445,20 +859,58 @@ async def api_setup_bridge(data: dict):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save credentials in database")
         
-    # Start bridge subprocess (using system token format)
-    system_token = f"system_cloud_bridge_{user_id}_{SYSTEM_SECRET}"
-    started = await start_user_bridge(user_id, login, password, server, system_token, mock=False)
+    # Start direct loop
+    is_mock = not MT5_AVAILABLE or token.startswith("ey.auric_test_jwt")
+    started = await start_direct_user_bridge(user_id, login, password, server, mock=is_mock)
     
     return {"success": started}
 
 @app.post("/bridge/stop/{user_id}")
 async def api_stop_bridge(user_id: str):
-    await stop_user_bridge(user_id)
+    await stop_direct_user_bridge(user_id)
+    return {"success": True}
+
+@app.post("/bridge/start/{user_id}")
+async def api_start_bridge_for_user(user_id: str):
+    accounts = await fetch_all_cloud_broker_accounts()
+    acc = next((a for a in accounts if a.get("user_id") == user_id), None)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Broker account not found")
+        
+    login = acc.get("login")
+    server = acc.get("server")
+    encrypted_pw = acc.get("credentials_enc")
+    
+    password = decrypt_password(encrypted_pw)
+    if not password:
+        raise HTTPException(status_code=500, detail="Failed to decrypt credentials")
+        
+    is_mock = not MT5_AVAILABLE
+    started = await start_direct_user_bridge(user_id, login, password, server, mock=is_mock)
+    return {"success": started}
+
+@app.post("/bridge/sync/{user_id}")
+async def api_sync_bridge_for_user(user_id: str):
+    accounts = await fetch_all_cloud_broker_accounts()
+    acc = next((a for a in accounts if a.get("user_id") == user_id), None)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Broker account not found")
+        
+    login = acc.get("login")
+    server = acc.get("server")
+    encrypted_pw = acc.get("credentials_enc")
+    
+    password = decrypt_password(encrypted_pw)
+    if not password:
+        raise HTTPException(status_code=500, detail="Failed to decrypt credentials")
+        
+    is_mock = not MT5_AVAILABLE
+    await sync_mt5_history(user_id, login, password, server, mock=is_mock)
     return {"success": True}
 
 @app.get("/bridge/status/{user_id}")
 async def get_bridge_status(user_id: str):
-    connected = user_id in bridge_manager.active_connections or user_id in active_bridge_processes
+    connected = user_id in bridge_manager.active_connections or user_id in active_direct_loops
     info = active_accounts.get(user_id, {
         "balance": 10000.00,
         "equity": 10000.00,

@@ -170,3 +170,17 @@ pm2 save
      - `subscription.cancelled`
      - `subscription.halted`
    - Set a webhook secret and configure it as `RAZORPAY_WEBHOOK_SECRET` in `.env.local`.
+
+---
+
+## Pushing to GitHub (Repository Deployment)
+
+This project is already initialized as a local Git repository and all files have been committed. To push the code to your GitHub account:
+
+1. **Create Repository**: Open your browser, navigate to [GitHub](https://github.com), and create a new repository (e.g. `auric-pro`). Do **NOT** initialize it with a README, license, or gitignore (since those are already present in this directory).
+2. **Link and Push**: Run the following commands in your command prompt / terminal inside this folder:
+   ```bash
+   git remote add origin https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME.git
+   git branch -M main
+   git push -u origin main
+   ```

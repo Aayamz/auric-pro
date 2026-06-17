@@ -50,6 +50,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     setSubscription
   } = useStore()
 
+  const email = storeUser?.email || ''
+  const isAdmin = email === 'demo@auricpro.com' || (process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
+
+  const navList = React.useMemo(() => {
+    const list = [...NAV_ITEMS]
+    if (isAdmin) {
+      list.splice(8, 0, { href: '/app/admin', label: 'Admin Panel', icon: ShieldAlert })
+    }
+    return list
+  }, [isAdmin])
+
   // Polling AI Commentary
   const [commentary, setCommentary] = React.useState<string[]>([
     "XAUUSD consolidation patterns suggest a short-term liquidity sweep above $1965 remains highly probable.",
@@ -147,7 +158,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           {/* Navigation Links */}
           <nav className="p-sm space-y-[2px]">
-            {NAV_ITEMS.map((item) => {
+            {navList.map((item) => {
               const Icon = item.icon
               const isActive = pathname === item.href
               return (
