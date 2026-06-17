@@ -32,7 +32,7 @@ interface AdminUser {
 export default function AdminPage() {
   const router = useRouter()
   const { user: storeUser } = useStore()
-  const [loading, setLoading] = useState(True)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [users, setUsers] = useState<AdminUser[]>([])
   const [totalUsers, setTotalUsers] = useState(0)
