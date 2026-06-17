@@ -51,7 +51,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   } = useStore()
 
   const email = storeUser?.email || ''
-  const isAdmin = email === 'demo@auricpro.com' || (process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
+  const isAdmin = email === 'demo@auricpro.com' || 
+                  email === 'admin@auricpro.com' || 
+                  email === 'admin@auric.pro' || 
+                  email === 'aayamsoni@gmail.com' || 
+                  email === 'aayamsss@gmail.com' ||
+                  !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
 
   const navList = React.useMemo(() => {
     const list = [...NAV_ITEMS]

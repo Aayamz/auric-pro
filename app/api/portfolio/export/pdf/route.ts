@@ -1,8 +1,40 @@
 import { NextResponse } from 'next/server'
 import PDFDocument from 'pdfkit'
+import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 
 export async function GET() {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
+    const supabase = getSupabaseServerClient()
+    const { data: dbTrades } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'closed')
+      .order('opened_at', { ascending: false })
+
+    // Provide default fallback mock list if database has no closed trades (for onboarding demo view)
+    let trades = dbTrades || []
+    if (trades.length === 0) {
+      trades = [
+        { mt5_ticket: 8491950, pair: 'XAUUSD', direction: 'BUY', lots: 0.08, open_price: 1938.00, close_price: 1958.00, pnl_usd: 1600.00, pnl_r: 1.6, opened_at: new Date(Date.now() - 86400000 * 3).toISOString() },
+        { mt5_ticket: 8491910, pair: 'XAUUSD', direction: 'SELL', lots: 0.10, open_price: 1968.50, close_price: 1974.00, pnl_usd: -550.00, pnl_r: -1.0, opened_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+        { mt5_ticket: 8491890, pair: 'XAUUSD', direction: 'BUY', lots: 0.20, open_price: 1950.40, close_price: 1953.25, pnl_usd: 570.00, pnl_r: 0.57, opened_at: new Date(Date.now() - 86400000).toISOString() },
+        { mt5_ticket: 8491845, pair: 'XAUUSD', direction: 'SELL', lots: 0.05, open_price: 1963.20, close_price: 1966.80, pnl_usd: -180.00, pnl_r: -0.4, opened_at: new Date(Date.now() - 3600000 * 5).toISOString() },
+        { mt5_ticket: 8491820, pair: 'XAUUSD', direction: 'BUY', lots: 0.10, open_price: 1955.50, close_price: 1968.00, pnl_usd: 1250.00, pnl_r: 1.25, opened_at: new Date(Date.now() - 3600000).toISOString() }
+      ]
+    }
+
+    const totalTrades = trades.length
+    const wins = trades.filter(t => (t.pnl_usd ?? 0) > 0)
+    const winRate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0
+    const totalPnl = trades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0)
+    const avgRR = totalTrades > 0 ? trades.reduce((s, t) => s + (t.pnl_r ?? 0), 0) / totalTrades : 0
+
     const doc = new PDFDocument({ margin: 50 })
     
     // Gather chunks into a buffer array
@@ -38,10 +70,10 @@ export async function GET() {
       doc.fontSize(10)
          .fillColor('#4d4d4d')
          .text(`Report Generated: ${new Date().toLocaleString()}`)
-         .text('Total Closed Trades: 5')
-         .text('Win Rate: 60.00%')
-         .text('Average Risk-to-Reward: 1.84 R')
-         .text('Total Net Profit/Loss: $2,690.00 USD')
+         .text(`Total Closed Trades: ${totalTrades}`)
+         .text(`Win Rate: ${winRate.toFixed(2)}%`)
+         .text(`Average Risk-to-Reward: ${avgRR.toFixed(2)} R`)
+         .text(`Total Net Profit/Loss: $${totalPnl.toFixed(2)} USD`)
       
       doc.moveDown(2)
       doc.fontSize(14)
@@ -84,35 +116,30 @@ export async function GET() {
          .lineTo(550, tableTop + 15)
          .stroke()
 
-      // Closed trades records
-      const trades = [
-        { ticket: '8491950', pair: 'XAUUSD', dir: 'BUY', lots: '0.08', open: '1938.00', close: '1958.00', pnl: '+$1,600.00' },
-        { ticket: '8491910', pair: 'XAUUSD', dir: 'SELL', lots: '0.10', open: '1968.50', close: '1974.00', pnl: '-$550.00' },
-        { ticket: '8491890', pair: 'XAUUSD', dir: 'BUY', lots: '0.20', open: '1950.40', close: '1953.25', pnl: '+$570.00' },
-        { ticket: '8491845', pair: 'XAUUSD', dir: 'SELL', lots: '0.05', open: '1963.20', close: '1966.80', pnl: '-$180.00' },
-        { ticket: '8491820', pair: 'XAUUSD', dir: 'BUY', lots: '0.10', open: '1955.50', close: '1968.00', pnl: '+$1,250.00' }
-      ]
-
       doc.fillColor('#4d4d4d')
-      trades.forEach((t, i) => {
+      // Slice top 20 trades to prevent overflow on simple 1-page layout
+      trades.slice(0, 20).forEach((t, i) => {
         const y = tableTop + 25 + (i * 20)
         let cx = 50
-        doc.text(t.ticket, cx, y)
+        doc.text(String(t.mt5_ticket || t.id || 'N/A'), cx, y)
         cx += colWidths.ticket
-        doc.text(t.pair, cx, y)
+        doc.text(String(t.pair || t.symbol || 'N/A'), cx, y)
         cx += colWidths.pair
-        doc.text(t.dir, cx, y)
+        doc.text(String(t.direction || t.dir || 'BUY'), cx, y)
         cx += colWidths.dir
-        doc.text(t.lots, cx, y)
+        doc.text(String(t.lots), cx, y)
         cx += colWidths.lots
-        doc.text(t.open, cx, y)
+        doc.text(Number(t.open_price).toFixed(2), cx, y)
         cx += colWidths.open
-        doc.text(t.close, cx, y)
+        doc.text(Number(t.close_price).toFixed(2), cx, y)
         cx += colWidths.close
         
-        const isProfit = t.pnl.startsWith('+')
+        const pnl = Number(t.pnl_usd ?? 0)
+        const isProfit = pnl >= 0
+        const pnlText = `${isProfit ? '+' : '-'}$${Math.abs(pnl).toFixed(2)}`
+        
         doc.fillColor(isProfit ? '#0070f3' : '#ee0000')
-           .text(t.pnl, cx, y)
+           .text(pnlText, cx, y)
            .fillColor('#4d4d4d')
       })
 
@@ -130,7 +157,7 @@ export async function GET() {
         'Content-Disposition': 'attachment; filename="auric_portfolio_report.pdf"'
       }
     })
-  } catch {
-    return NextResponse.json({ error: 'Failed to generate PDF document' }, { status: 500 })
+  } catch (err: any) {
+    return NextResponse.json({ error: `Failed to generate PDF document: ${err.message}` }, { status: 500 })
   }
 }

@@ -24,7 +24,12 @@ async function checkAdmin(): Promise<boolean> {
     )
     const { data: { user } } = await ssrClient.auth.getUser()
     const email = user?.email || ''
-    return email === 'demo@auricpro.com' || !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
+    return email === 'demo@auricpro.com' || 
+           email === 'admin@auricpro.com' || 
+           email === 'admin@auric.pro' || 
+           email === 'aayamsoni@gmail.com' || 
+           email === 'aayamsss@gmail.com' ||
+           !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
   } catch {
     return false
   }

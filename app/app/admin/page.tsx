@@ -69,7 +69,12 @@ export default function AdminPage() {
     supabase.auth.getUser()
       .then(({ data }) => {
         const email = data.user?.email || storeUser?.email || ''
-        const isAdmin = email === 'demo@auricpro.com' || email === 'admin@auricpro.com' || email === 'admin@auric.pro'
+        const isAdmin = email === 'demo@auricpro.com' || 
+                        email === 'admin@auricpro.com' || 
+                        email === 'admin@auric.pro' || 
+                        email === 'aayamsoni@gmail.com' || 
+                        email === 'aayamsss@gmail.com' ||
+                        !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
         
         if (!isAdmin) {
           router.replace('/app/dashboard')

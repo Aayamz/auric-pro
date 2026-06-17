@@ -75,7 +75,12 @@ export default function SettingsPage() {
   // Billing
   const [plan, setPlan] = useState<'free' | 'pro' | 'elite'>('pro')
 
-  const isAdmin = user?.email === 'demo@auricpro.com' || (process.env.NEXT_PUBLIC_ADMIN_EMAIL && user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
+  const isAdmin = user?.email === 'demo@auricpro.com' || 
+                  user?.email === 'admin@auricpro.com' || 
+                  user?.email === 'admin@auric.pro' || 
+                  user?.email === 'aayamsoni@gmail.com' || 
+                  user?.email === 'aayamsss@gmail.com' ||
+                  !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
 
   useEffect(() => {
     if (subscription?.plan) {

@@ -36,7 +36,12 @@ export async function GET() {
     email = user?.email || ''
   } catch {}
 
-  const isAdmin = email === 'demo@auricpro.com' || (process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
+  const isAdmin = email === 'demo@auricpro.com' || 
+                  email === 'admin@auricpro.com' || 
+                  email === 'admin@auric.pro' || 
+                  email === 'aayamsoni@gmail.com' || 
+                  email === 'aayamsss@gmail.com' ||
+                  !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
   if (!isAdmin) {
     return NextResponse.json({ error: 'Forbidden. Admin access required.' }, { status: 403 })
   }

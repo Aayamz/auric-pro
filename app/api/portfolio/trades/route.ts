@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
       .order('opened_at', { ascending: false })
       .limit(200)
 
-    if (pair) query = query.eq('symbol', pair)
+    if (pair) query = query.eq('pair', pair)
     if (strategy) query = query.eq('strategy', strategy)
 
     const { data: trades, count } = await query
