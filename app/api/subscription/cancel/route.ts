@@ -24,19 +24,9 @@ export async function POST() {
     const keyId = process.env.RAZORPAY_KEY_ID || ''
     const keySecret = process.env.RAZORPAY_KEY_SECRET || ''
 
-    // If it's a mock subscription or credentials are not defined
-    if (subId.startsWith('sub_mock_') || !keyId || !keySecret) {
-      console.log("Cancelling mock subscription:", subId)
-      await supabase
-        .from('subscriptions')
-        .update({
-          plan: 'free',
-          status: 'canceled',
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', userId)
-
-      return NextResponse.json({ success: true })
+    // Reject mock subscription cancellation and ensure credentials are set
+    if (subId.startsWith('sub_mock_') || !keyId || !keySecret || keyId.includes('placeholder') || keySecret.includes('placeholder')) {
+      return NextResponse.json({ error: 'Razorpay credentials are missing or configured as placeholders. Cannot process cancellation.' }, { status: 400 })
     }
 
     // Call Razorpay API to cancel subscription immediately

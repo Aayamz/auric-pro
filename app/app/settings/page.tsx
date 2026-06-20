@@ -4,7 +4,8 @@ import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createSupabaseClient } from '@/lib/supabase'
 import { useStore } from '@/store'
-import { Settings, Bell, Key, CreditCard, Trash2, Save, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { useToast, ToastProvider } from '@/components/Toast'
+import { Settings, Bell, Key, CreditCard, Trash2, Save, Eye, EyeOff, Loader2, CheckCircle2, X } from 'lucide-react'
 
 type TabId = 'account' | 'broker' | 'notifications' | 'billing' | 'danger'
 
@@ -49,8 +50,17 @@ function SaveButton({ onClick, saving }: { onClick: () => void; saving: boolean 
 }
 
 export default function SettingsPage() {
+  return (
+    <ToastProvider>
+      <SettingsContent />
+    </ToastProvider>
+  )
+}
+
+function SettingsContent() {
   const router = useRouter()
-  const { user: storeUser, subscription, setSubscription } = useStore()
+  const { user: storeUser, subscription, setSubscription, bridgeStatus } = useStore()
+  const { addToast } = useToast()
   const [tab, setTab] = useState<TabId>('account')
   const [saving, setSaving] = useState(false)
   const [user, setUser] = useState<{ email?: string; user_metadata?: Record<string, unknown> } | null>(null)
@@ -66,6 +76,11 @@ export default function SettingsPage() {
   const [cloudMode, setCloudMode] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
   const [brokerSaved, setBrokerSaved] = useState(false)
+  const [activeAccount, setActiveAccount] = useState<{ connected: boolean; login: string | number | null; server: string | null; mock: boolean; balance: number; equity: number } | null>(null)
+
+  // Broker connection confirmation dialog
+  const [brokerDialogOpen, setBrokerDialogOpen] = useState(false)
+  const [confirmedAccount, setConfirmedAccount] = useState<{ login: string | number | null; server: string | null; balance: number; equity: number; mock: boolean } | null>(null)
 
   // Notifications
   const [notifSettings, setNotifSettings] = useState({
@@ -124,6 +139,29 @@ export default function SettingsPage() {
     }).catch(() => {})
   }, [router, storeUser])
 
+  useEffect(() => {
+    if (tab === 'broker') {
+      const checkStatus = () => {
+        fetch('/api/bridge/status')
+          .then(r => r.json())
+          .then(d => {
+            setActiveAccount({
+              connected: d.connected,
+              login: d.login,
+              server: d.server,
+              mock: d.mock,
+              balance: d.balance ?? 0,
+              equity: d.equity ?? 0
+            })
+          })
+          .catch(() => {})
+      }
+      checkStatus()
+      const interval = setInterval(checkStatus, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [tab])
+
   const saveAccount = async () => {
     setSaving(true)
     try {
@@ -132,6 +170,14 @@ export default function SettingsPage() {
   }
 
   const saveBroker = async () => {
+    if (!login || !password || !server) {
+      addToast({ type: 'error', title: 'Missing fields', message: 'Please fill in MT5 login, password, and server.', duration: 4000 })
+      return
+    }
+    if (!/^\d+$/.test(login)) {
+      addToast({ type: 'error', title: 'Invalid Login', message: 'MT5 Login must be a numeric account number (e.g. 12345678), not an email.', duration: 5000 })
+      return
+    }
     setSaving(true)
     try {
       const response = await fetch('/api/settings/broker', { 
@@ -142,9 +188,40 @@ export default function SettingsPage() {
       if (response.ok) {
         setBrokerSaved(true)
         setPassword('')
+        addToast({ type: 'info', title: 'Broker credentials saved', message: 'Waiting for bridge connection…', duration: 3000 })
+        // Poll bridge status after 2s to get confirmed account info
+        setTimeout(async () => {
+          try {
+            const statusRes = await fetch('/api/bridge/status')
+            if (statusRes.ok) {
+              const d = await statusRes.json()
+              if (d.connected) {
+                setConfirmedAccount({
+                  login: d.login ?? login,
+                  server: d.server ?? server,
+                  balance: d.balance ?? 0,
+                  equity: d.equity ?? 0,
+                  mock: d.mock ?? false
+                })
+                setBrokerDialogOpen(true)
+              } else {
+                addToast({
+                  type: 'warning',
+                  title: 'Credentials saved, bridge not yet connected',
+                  message: 'The bridge will connect automatically. Check bridge status in a few seconds.',
+                  duration: 6000
+                })
+              }
+            }
+          } catch {
+            addToast({ type: 'info', title: 'Credentials saved', message: 'Bridge status could not be verified yet.', duration: 4000 })
+          }
+        }, 2500)
       } else {
-        alert("Failed to save broker connection.")
+        addToast({ type: 'error', title: 'Failed to save broker connection', message: 'Please check your credentials and try again.', duration: 5000 })
       }
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Save Error', message: err.message, duration: 5000 })
     } finally { setSaving(false) }
   }
 
@@ -189,22 +266,22 @@ export default function SettingsPage() {
         })
         const mockData = await mockRes.json()
         if (mockData.success) {
-          alert(`Success: Upgraded to mock ${plan.toUpperCase()} plan (Sandbox)`)
+          addToast({ type: 'success', title: `Upgraded to ${plan.toUpperCase()} (Sandbox)`, message: 'Mock plan activated successfully.', duration: 5000 })
           window.location.reload()
         } else {
-          alert(`Mock upgrade failed: ${mockData.error}`)
+          addToast({ type: 'error', title: 'Mock upgrade failed', message: mockData.error, duration: 5000 })
         }
         return
       }
 
       if (data.error) {
-        alert(`Checkout Error: ${data.error}`)
+        addToast({ type: 'error', title: 'Checkout Error', message: data.error, duration: 5000 })
         return
       }
 
       const scriptLoaded = await loadRazorpayScript()
       if (!scriptLoaded) {
-        alert("Failed to load Razorpay Checkout SDK.")
+        addToast({ type: 'error', title: 'Payment SDK Error', message: 'Failed to load Razorpay Checkout SDK.', duration: 5000 })
         return
       }
 
@@ -214,7 +291,7 @@ export default function SettingsPage() {
         name: 'AURIC PRO',
         description: `${plan.toUpperCase()} Plan Subscription`,
         handler: async function (response: any) {
-          alert("Payment successful! Upgrading subscription...")
+          addToast({ type: 'success', title: 'Payment Successful', message: 'Upgrading your subscription...', duration: 5000 })
           window.location.reload()
         },
         prefill: {
@@ -228,7 +305,7 @@ export default function SettingsPage() {
       const rzp = new (window as any).Razorpay(options)
       rzp.open()
     } catch (err: any) {
-      alert(`Upgrade error: ${err.message}`)
+      addToast({ type: 'error', title: 'Upgrade Error', message: err.message, duration: 5000 })
     } finally {
       setSaving(false)
     }
@@ -241,13 +318,13 @@ export default function SettingsPage() {
       const res = await fetch('/api/subscription/cancel', { method: 'POST' })
       const data = await res.json()
       if (data.success) {
-        alert("Subscription cancelled successfully.")
+        addToast({ type: 'success', title: 'Subscription cancelled', message: 'Your plan has been reverted to free.', duration: 5000 })
         window.location.reload()
       } else {
-        alert(`Cancellation failed: ${data.error}`)
+        addToast({ type: 'error', title: 'Cancellation failed', message: data.error, duration: 5000 })
       }
     } catch (err: any) {
-      alert(`Error: ${err.message}`)
+      addToast({ type: 'error', title: 'Error', message: err.message, duration: 5000 })
     } finally {
       setSaving(false)
     }
@@ -255,6 +332,74 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-lg">
+      {/* Broker Connection Confirmation Dialog */}
+      {brokerDialogOpen && confirmedAccount && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-canvas border border-hairline rounded-md shadow-level-5 w-full max-w-[480px] p-xl space-y-lg relative">
+            {/* Close button */}
+            <button
+              onClick={() => setBrokerDialogOpen(false)}
+              className="absolute top-md right-md text-mute hover:text-ink transition-colors"
+            >
+              <X className="w-sm h-sm" />
+            </button>
+
+            <div className="flex items-center gap-sm">
+              <div className="w-[40px] h-[40px] rounded-full bg-success/10 flex items-center justify-center border border-success/30">
+                <CheckCircle2 className="w-sm h-sm text-success" />
+              </div>
+              <div>
+                <h3 className="font-sans text-body-md font-semibold text-ink">
+                  {confirmedAccount.mock ? 'Connected to MT5 Sandbox' : 'MT5 Account Connected'}
+                </h3>
+                <p className="font-mono text-[10px] text-mute uppercase">
+                  {confirmedAccount.mock ? 'DEMO / SANDBOX MODE' : 'LIVE TRADING ENABLED'}
+                </p>
+              </div>
+            </div>
+
+            <div className="border border-hairline rounded-md divide-y divide-hairline">
+              <div className="flex justify-between items-center px-md py-sm">
+                <span className="font-mono text-caption-mono text-mute uppercase">Account Login</span>
+                <span className="font-sans text-body-sm font-semibold text-ink">{confirmedAccount.login || '—'}</span>
+              </div>
+              <div className="flex justify-between items-center px-md py-sm">
+                <span className="font-mono text-caption-mono text-mute uppercase">Server</span>
+                <span className="font-sans text-body-sm font-semibold text-ink">{confirmedAccount.server || '—'}</span>
+              </div>
+              <div className="flex justify-between items-center px-md py-sm">
+                <span className="font-mono text-caption-mono text-mute uppercase">Balance</span>
+                <span className="font-sans text-body-sm font-semibold text-success">${confirmedAccount.balance.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center px-md py-sm">
+                <span className="font-mono text-caption-mono text-mute uppercase">Equity</span>
+                <span className="font-sans text-body-sm font-semibold text-ink">${confirmedAccount.equity.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center px-md py-sm">
+                <span className="font-mono text-caption-mono text-mute uppercase">Mode</span>
+                <span className={`font-mono text-[10px] font-bold px-xs py-[2px] rounded-xs border ${
+                  confirmedAccount.mock
+                    ? 'text-mute border-hairline'
+                    : 'text-success border-success/30 bg-success/5'
+                }`}>
+                  {confirmedAccount.mock ? 'SANDBOX' : 'LIVE'}
+                </span>
+              </div>
+            </div>
+
+            <p className="font-sans text-caption text-mute">
+              Your broker account is now active. All executed trades will be routed to this MT5 account.
+            </p>
+
+            <button
+              onClick={() => setBrokerDialogOpen(false)}
+              className="w-full bg-primary text-on-primary font-sans text-button-md font-semibold h-[40px] rounded-sm hover:opacity-90 transition-opacity"
+            >
+              Got it, Start Trading
+            </button>
+          </div>
+        </div>
+      )}
       <div>
         <h2 className="font-sans text-display-lg font-semibold text-ink tracking-tight">Settings</h2>
         <p className="font-sans text-body-sm text-body-text mt-xxs">Manage account, broker connection, notifications and billing.</p>
@@ -300,6 +445,40 @@ export default function SettingsPage() {
 
           {tab === 'broker' && (
             <SectionCard title="MT5 Broker Connection" action={<SaveButton onClick={saveBroker} saving={saving} />}>
+              {activeAccount?.connected ? (
+                <div className="mb-md p-md bg-[#d3e5ff]/20 border border-[#0070f3]/30 rounded-md flex items-center justify-between">
+                  <div className="flex items-center gap-sm">
+                    <span className="w-xxs h-xxs rounded-full bg-[#0070f3] animate-pulse shrink-0" />
+                    <div>
+                      <span className="font-sans text-body-sm font-semibold text-ink block">
+                        {activeAccount.mock ? 'Connected to MT5 Sandbox' : 'Actively Connected to Live MT5'}
+                      </span>
+                      <span className="font-mono text-[10px] text-mute uppercase block">
+                        Account: {activeAccount.login || 'Default'} • Server: {activeAccount.server || 'Demo-Server'}
+                      </span>
+                      <span className="font-mono text-[10px] text-mute block mt-xxs">
+                        Balance: <span className="text-success font-semibold">${(activeAccount.balance ?? 0).toFixed(2)}</span>
+                        {' • Equity: '}<span className="font-semibold">${(activeAccount.equity ?? 0).toFixed(2)}</span>
+                      </span>
+                    </div>
+                  </div>
+                  <span className={`font-mono text-[10px] border px-xxs py-[2px] rounded-md font-bold uppercase ${
+                    activeAccount.mock 
+                      ? 'text-mute border-hairline' 
+                      : 'text-[#0070f3] border-[#0070f3]/30'
+                  }`}>
+                    {activeAccount.mock ? 'Mock' : 'Live'}
+                  </span>
+                </div>
+              ) : (
+                <div className="mb-md p-md bg-canvas-soft border border-hairline rounded-md flex items-center gap-sm">
+                  <span className="w-xxs h-xxs rounded-full bg-[#ee0000] shrink-0" />
+                  <div>
+                    <span className="font-sans text-body-sm font-semibold text-ink block">Execution Bridge Disconnected</span>
+                    <span className="font-sans text-[10px] text-mute">Your credentials must be saved below to connect the live bridge.</span>
+                  </div>
+                </div>
+              )}
               {cloudMode ? (
                 <div className="p-sm bg-canvas-soft border border-hairline rounded-sm font-sans text-caption text-body-text mb-sm">
                   <strong className="text-ink">Cloud Execution:</strong> Your credentials are encrypted on the server. The data bridge runs continuously on our Windows EC2 server. You do not need to download or run anything locally.

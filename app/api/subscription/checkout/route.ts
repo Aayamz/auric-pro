@@ -19,10 +19,11 @@ export async function POST(request: Request) {
       ? process.env.RAZORPAY_PLAN_PRO_ID 
       : process.env.RAZORPAY_PLAN_ELITE_ID
 
-    // If Razorpay keys or plan IDs are not set, fall back to mock sandbox upgrade mode
-    if (!keyId || !keySecret || !planId) {
-      console.warn("Razorpay environment keys or plan IDs are missing. Falling back to mock subscription.")
-      return NextResponse.json({ mock: true })
+    console.log(`[Checkout API] Selecting plan: '${plan}' -> resolved planId: '${planId}' (PRO ID: '${process.env.RAZORPAY_PLAN_PRO_ID}', ELITE ID: '${process.env.RAZORPAY_PLAN_ELITE_ID}')`)
+
+    // Ensure Razorpay keys and plan IDs are set and not placeholders
+    if (!keyId || !keySecret || !planId || keyId.includes('placeholder') || keySecret.includes('placeholder')) {
+      return NextResponse.json({ error: 'Razorpay payment gateway credentials are not configured or are set as placeholder templates.' }, { status: 400 })
     }
 
     const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64')
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: data.error?.description || 'Razorpay subscription creation failed' }, { status: response.status })
     }
 
-    return NextResponse.json({ subscriptionId: data.id, keyId })
+    return NextResponse.json({ subscriptionId: data.id, keyId, plan, planId })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown checkout error'
     return NextResponse.json({ error: message }, { status: 500 })

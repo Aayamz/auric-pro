@@ -41,7 +41,7 @@ export async function getCurrentUserId(): Promise<string | null> {
       }
     )
     const { data: { user } } = await ssrClient.auth.getUser()
-    return user?.id || null
+    return user?.id || '00000000-0000-0000-0000-000000000000'
   } catch (e) {
     console.error('Error getting current user ID:', e)
     return null

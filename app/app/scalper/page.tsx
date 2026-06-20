@@ -3,28 +3,34 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '@/store'
 import { useLiveData } from '@/hooks/useLiveData'
+import { ToastProvider, useToast } from '@/components/Toast'
 import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from 'lightweight-charts'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowUp, ArrowDown, X, AlertTriangle } from 'lucide-react'
+import { ArrowUp, ArrowDown, X, AlertTriangle, Loader2, WifiOff } from 'lucide-react'
 
-export default function ScalperPage() {
+function ScalperContent() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
 
   const { openTrade, closeTrade } = useLiveData()
   const { prices, positions, bridgeStatus } = useStore()
+  const { addToast } = useToast()
 
   const [lots, setLots] = useState(0.01)
   const [slPips, setSlPips] = useState(50)
   const [tpPips, setTpPips] = useState(100)
   const [aiAuto, setAiAuto] = useState(false)
   const [confirmCloseAll, setConfirmCloseAll] = useState(false)
+  const [buyLoading, setBuyLoading] = useState(false)
+  const [sellLoading, setSellLoading] = useState(false)
 
   const xauPrice = prices['XAUUSD']
   const bid = xauPrice?.bid ?? 1950.00
   const ask = xauPrice?.ask ?? 1950.50
   const spread = xauPrice?.spread ?? 0.50
+
+  const isBridgeConnected = bridgeStatus === 'connected'
 
   // ATR / session mock
   const atr = 2.4
@@ -39,6 +45,9 @@ export default function ScalperPage() {
     queryKey: ['ohlcv-m1'],
     queryFn: async () => {
       const res = await fetch('/api/market/ohlcv?pair=XAUUSD&tf=M1&bars=200')
+      if (!res.ok) {
+        throw new Error('Failed to fetch live market data')
+      }
       return res.json()
     },
     refetchInterval: 15000
@@ -93,32 +102,57 @@ export default function ScalperPage() {
   }, [])
 
   useEffect(() => {
-    if (candleSeriesRef.current && ohlcvData?.length > 0) {
+    if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
       candleSeriesRef.current.setData(ohlcvData)
     }
   }, [ohlcvData])
 
-  // Debounced trade actions (300ms to prevent double-clicks)
-  const buyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const sellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const executeTrade = useCallback(async (direction: 'BUY' | 'SELL') => {
+    if (!isBridgeConnected) {
+      addToast({
+        type: 'error',
+        title: 'Bridge Disconnected',
+        message: 'Connect your MT5 broker account in Settings → Broker / MT5 before placing trades.',
+        duration: 6000
+      })
+      return
+    }
 
-  const handleBuy = useCallback(() => {
-    if (buyTimerRef.current) clearTimeout(buyTimerRef.current)
-    buyTimerRef.current = setTimeout(() => {
-      openTrade({ pair: 'XAUUSD', direction: 'BUY', lots, sl: bid - slPips * 0.1, tp: bid + tpPips * 0.1 })
-    }, 300)
-  }, [lots, slPips, tpPips, bid, openTrade])
+    const setLoading = direction === 'BUY' ? setBuyLoading : setSellLoading
+    setLoading(true)
 
-  const handleSell = useCallback(() => {
-    if (sellTimerRef.current) clearTimeout(sellTimerRef.current)
-    sellTimerRef.current = setTimeout(() => {
-      openTrade({ pair: 'XAUUSD', direction: 'SELL', lots, sl: ask + slPips * 0.1, tp: ask - tpPips * 0.1 })
-    }, 300)
-  }, [lots, slPips, tpPips, ask, openTrade])
+    const sl = direction === 'BUY' ? bid - slPips * 0.1 : ask + slPips * 0.1
+    const tp = direction === 'BUY' ? bid + tpPips * 0.1 : ask - tpPips * 0.1
+
+    try {
+      const result = await openTrade({ pair: 'XAUUSD', direction, lots, sl, tp })
+      addToast({
+        type: 'success',
+        title: `${direction} Order Sent`,
+        message: result.ticket
+          ? `Ticket #${result.ticket} opened at ${result.open_price ?? (direction === 'BUY' ? ask : bid).toFixed(2)}`
+          : result.message || `${lots}L XAUUSD ${direction} order submitted to MT5`,
+        duration: 5000
+      })
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Trade Failed',
+        message: err.message || 'MT5 bridge could not execute the trade.',
+        duration: 7000
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [isBridgeConnected, bid, ask, slPips, tpPips, lots, openTrade, addToast])
+
+  const handleBuy = useCallback(() => executeTrade('BUY'), [executeTrade])
+  const handleSell = useCallback(() => executeTrade('SELL'), [executeTrade])
 
   const handleCloseAll = () => {
     positions.forEach(p => closeTrade(p.ticket))
     setConfirmCloseAll(false)
+    addToast({ type: 'info', title: 'Close All Sent', message: 'Close requests submitted for all open positions.', duration: 4000 })
   }
 
   return (
@@ -129,13 +163,25 @@ export default function ScalperPage() {
           AURIC PRO — <span className="text-[#f5a623]">SCALPER MODE</span>
         </span>
         <div className="flex items-center gap-sm">
-          <span className={`w-xxs h-xxs rounded-full inline-block ${bridgeStatus === 'connected' ? 'bg-[#0070f3] animate-pulse' : 'bg-[#ee0000] animate-pulse'}`} />
+          <span className={`w-xxs h-xxs rounded-full inline-block ${isBridgeConnected ? 'bg-[#0070f3] animate-pulse' : 'bg-[#ee0000] animate-pulse'}`} />
           <span className="font-mono text-caption-mono text-white/40 uppercase">Bridge: {bridgeStatus}</span>
           <a href="/app/dashboard" className="border border-[#2a2a2a] px-sm py-xxs rounded-sm text-white/50 hover:text-white/80 font-sans text-caption transition-colors">
             Exit Scalper
           </a>
         </div>
       </div>
+
+      {/* Bridge disconnected banner */}
+      {!isBridgeConnected && (
+        <div className="bg-[#ee0000]/10 border-b border-[#ee0000]/30 px-lg py-xs flex items-center gap-sm shrink-0">
+          <WifiOff className="w-xxs h-xxs text-[#ee0000] shrink-0" />
+          <span className="font-mono text-caption-mono text-[#ee0000]">
+            MT5 bridge offline — trades cannot be executed. Go to{' '}
+            <a href="/app/settings" className="underline hover:text-white/80">Settings → Broker / MT5</a>
+            {' '}to connect.
+          </span>
+        </div>
+      )}
 
       {/* 3-column layout */}
       <div className="flex-1 flex min-h-0">
@@ -190,10 +236,10 @@ export default function ScalperPage() {
           <div>
             <label className="font-mono text-[9px] text-white/30 uppercase block mb-xxs">LOT SIZE</label>
             <div className="flex items-center border border-[#2a2a2a] rounded-sm overflow-hidden">
-              <button onClick={() => setLots(Math.max(0.01, lots - 0.01))} className="px-xs py-xxs bg-[#1a1a1a] text-white/60 hover:text-white border-r border-[#2a2a2a]">−</button>
+              <button onClick={() => setLots(Math.max(0.01, parseFloat((lots - 0.01).toFixed(2))))} className="px-xs py-xxs bg-[#1a1a1a] text-white/60 hover:text-white border-r border-[#2a2a2a]">−</button>
               <input type="number" value={lots} step={0.01} min={0.01} onChange={e => setLots(parseFloat(e.target.value))}
                 className="flex-1 bg-transparent text-center font-mono text-body-sm text-white focus:outline-none py-xxs" />
-              <button onClick={() => setLots(lots + 0.01)} className="px-xs py-xxs bg-[#1a1a1a] text-white/60 hover:text-white border-l border-[#2a2a2a]">+</button>
+              <button onClick={() => setLots(parseFloat((lots + 0.01).toFixed(2)))} className="px-xs py-xxs bg-[#1a1a1a] text-white/60 hover:text-white border-l border-[#2a2a2a]">+</button>
             </div>
           </div>
 
@@ -212,13 +258,35 @@ export default function ScalperPage() {
           </div>
 
           {/* BUY / SELL Buttons */}
-          <button onClick={handleBuy}
-            className="w-full bg-[#0070f3] text-white font-sans text-button-lg font-bold py-md rounded-sm hover:bg-[#0761d1] active:scale-[0.98] transition-all flex items-center justify-center gap-xs">
-            <ArrowUp className="w-sm h-sm" /> BUY MARKET
+          <button
+            onClick={handleBuy}
+            disabled={buyLoading || sellLoading}
+            className={`w-full font-sans text-button-lg font-bold py-md rounded-sm active:scale-[0.98] transition-all flex items-center justify-center gap-xs ${
+              !isBridgeConnected
+                ? 'bg-[#0070f3]/40 text-white/40 cursor-not-allowed'
+                : 'bg-[#0070f3] text-white hover:bg-[#0761d1] disabled:opacity-60 disabled:cursor-not-allowed'
+            }`}
+            title={!isBridgeConnected ? 'Bridge disconnected — connect MT5 first' : 'Open BUY position'}
+          >
+            {buyLoading
+              ? <><Loader2 className="w-xs h-xs animate-spin" /> Sending...</>
+              : <><ArrowUp className="w-sm h-sm" /> BUY MARKET</>
+            }
           </button>
-          <button onClick={handleSell}
-            className="w-full bg-[#ee0000] text-white font-sans text-button-lg font-bold py-md rounded-sm hover:bg-[#c50000] active:scale-[0.98] transition-all flex items-center justify-center gap-xs">
-            <ArrowDown className="w-sm h-sm" /> SELL MARKET
+          <button
+            onClick={handleSell}
+            disabled={buyLoading || sellLoading}
+            className={`w-full font-sans text-button-lg font-bold py-md rounded-sm active:scale-[0.98] transition-all flex items-center justify-center gap-xs ${
+              !isBridgeConnected
+                ? 'bg-[#ee0000]/40 text-white/40 cursor-not-allowed'
+                : 'bg-[#ee0000] text-white hover:bg-[#c50000] disabled:opacity-60 disabled:cursor-not-allowed'
+            }`}
+            title={!isBridgeConnected ? 'Bridge disconnected — connect MT5 first' : 'Open SELL position'}
+          >
+            {sellLoading
+              ? <><Loader2 className="w-xs h-xs animate-spin" /> Sending...</>
+              : <><ArrowDown className="w-sm h-sm" /> SELL MARKET</>
+            }
           </button>
 
           {/* AI Auto Toggle */}
@@ -272,5 +340,13 @@ export default function ScalperPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function ScalperPage() {
+  return (
+    <ToastProvider>
+      <ScalperContent />
+    </ToastProvider>
   )
 }

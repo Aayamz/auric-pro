@@ -19,31 +19,7 @@ export async function GET() {
     if (positionsData) {
       return NextResponse.json(JSON.parse(positionsData))
     }
-  } catch {
-    console.warn("Failed to fetch open positions from Redis, returning mock.")
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Redis cache server is offline' }, { status: 500 })
   }
-
-  // Fallback Mock Open Positions
-  return NextResponse.json([
-    {
-      ticket: 948172,
-      symbol: "XAUUSD",
-      type: "BUY",
-      volume: 0.10,
-      open_price: 1955.50,
-      current_price: 1957.80,
-      profit: 230.00,
-      pips: 23.0
-    },
-    {
-      ticket: 948195,
-      symbol: "XAUUSD",
-      type: "SELL",
-      volume: 0.05,
-      open_price: 1960.20,
-      current_price: 1959.00,
-      profit: 60.00,
-      pips: 12.0
-    }
-  ])
 }

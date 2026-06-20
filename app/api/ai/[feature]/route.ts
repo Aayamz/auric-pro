@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server'
+import { createClient } from 'redis'
+import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
+
+const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
 async function callGemini(prompt: string, responseJson: boolean = false, maxTokens: number = 300): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY
@@ -39,8 +44,6 @@ async function callGemini(prompt: string, responseJson: boolean = false, maxToke
   return text.trim()
 }
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000'
-
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ feature: string }> }
@@ -50,32 +53,74 @@ export async function GET(
   if (feature === 'regime') {
     try {
       const res = await fetch(`${PYTHON_API_URL}/regime`)
-      if (res.ok) {
-        const data = await res.json()
-        return NextResponse.json(data)
+      if (!res.ok) {
+        throw new Error(`FastAPI backend responded with status ${res.status}`)
       }
-    } catch {
-      // Offline fallback
+      const data = await res.json()
+      return NextResponse.json(data)
+    } catch (err: any) {
+      return NextResponse.json({ error: err.message || 'FastAPI execution engine is offline' }, { status: 502 })
     }
-
-    return NextResponse.json({
-      regime: 'ranging',
-      recommended_strategy: 'fvg_scalper',
-      rationale: 'XAUUSD is consolidating within a tight range of $1945 - $1960. Average True Range is contracting and volume indicators show balanced distributions.'
-    })
   }
 
   if (feature === 'context') {
-    return NextResponse.json({
-      selectedPair: 'XAUUSD',
-      activeStrategy: 'ema_crossover',
-      openPositionsCount: 2,
-      dailyPnl: -45.50,
-      regime: 'trending_bull',
-      rsi: 42.5,
-      atr: 2.4,
-      bridgeStatus: 'connected'
-    })
+    const userId = await getCurrentUserId()
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    try {
+      const supabase = getSupabaseServerClient()
+      const redis = createClient({ url: REDIS_URL })
+      await redis.connect()
+
+      // Get open positions count
+      const positionsData = await redis.get(`positions:${userId}`)
+      const positions = positionsData ? JSON.parse(positionsData) : []
+      const openPositionsCount = positions.length
+
+      // Get daily P&L from trades
+      const startOfDay = new Date()
+      startOfDay.setHours(0,0,0,0)
+      const { data: todayTrades, error: dbError } = await supabase
+        .from('trades')
+        .select('pnl_usd')
+        .eq('user_id', userId)
+        .gte('opened_at', startOfDay.toISOString())
+
+      if (dbError) throw dbError
+
+      const dailyPnl = (todayTrades || []).reduce((s, t) => s + (t.pnl_usd ?? 0), 0)
+
+      // Get bridge status
+      const bridgeStatusKey = await redis.get(`bridge:status:${userId}`)
+      const bridgeStatus = bridgeStatusKey ? 'connected' : 'disconnected'
+
+      await redis.disconnect()
+
+      // Fetch regime from FastAPI
+      let regime = 'ranging'
+      try {
+        const regimeRes = await fetch(`${PYTHON_API_URL}/regime`)
+        if (regimeRes.ok) {
+          const regimeData = await regimeRes.json()
+          regime = regimeData.regime
+        }
+      } catch {}
+
+      return NextResponse.json({
+        selectedPair: 'XAUUSD',
+        activeStrategy: 'ema_crossover',
+        openPositionsCount,
+        dailyPnl,
+        regime,
+        rsi: 42.5,
+        atr: 2.4,
+        bridgeStatus
+      })
+    } catch (err: any) {
+      return NextResponse.json({ error: err.message || 'Failed to retrieve live connection context' }, { status: 500 })
+    }
   }
 
   return NextResponse.json({ error: 'Not Found' }, { status: 404 })
@@ -93,9 +138,12 @@ export async function POST(
     if (feature === 'analyze-backtest') {
       const results = body.results || {}
       
-      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here' && process.env.GEMINI_API_KEY !== 'placeholder') {
-        try {
-          const prompt = `Analyze this backtest report and explain strengths and weaknesses in under 100 words:
+      if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here' || process.env.GEMINI_API_KEY === 'placeholder') {
+        return NextResponse.json({ error: 'Google Gemini API key is not configured. Live AI advisor is required.' }, { status: 400 })
+      }
+
+      try {
+        const prompt = `Analyze this backtest report and explain strengths and weaknesses in under 100 words:
 Strategy: ${results.strategy}
 Net Profit: $${results.net_pnl}
 Win Rate: ${results.win_rate}%
@@ -103,37 +151,22 @@ Profit Factor: ${results.profit_factor}
 Max Drawdown: ${results.max_drawdown_pct}%
 Total Trades: ${results.total_trades}`
 
-          const text = await callGemini(prompt, false, 200)
-          return NextResponse.json({ analysis: text })
-        } catch (err) {
-          console.error("Gemini backtest analysis failed:", err)
-        }
+        const text = await callGemini(prompt, false, 200)
+        return NextResponse.json({ analysis: text })
+      } catch (err: any) {
+        return NextResponse.json({ error: `Gemini call failed: ${err.message}` }, { status: 502 })
       }
-
-      return NextResponse.json({
-        analysis: "The strategy shows highly consistent equity growth. Win rate at " + (results.win_rate || 64) + "% is solid, and drawdown is held in tight bounds under " + (results.max_drawdown_pct || 5) + "%. Recommendation is to initiate forward-testing on demo account."
-      })
     }
 
     if (feature === 'build-strategy') {
       const description = body.description || ''
-      let config = {
-        htf: "H1",
-        ltf: "M5",
-        swing_length: 15,
-        ob_enabled: true,
-        fvg_enabled: false,
-        liquidity_enabled: true,
-        sessions: ["London"],
-        min_rr: 2.0,
-        trailing_start_rr: 1.0,
-        break_even_after_rr: 1.0,
-        tp_levels: [{ rr: 1.5, close_pct: 50 }, { rr: 3.0, close_pct: 50 }]
+      
+      if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here' || process.env.GEMINI_API_KEY === 'placeholder') {
+        return NextResponse.json({ error: 'Google Gemini API key is not configured. Live AI advisor is required.' }, { status: 400 })
       }
 
-      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here' && process.env.GEMINI_API_KEY !== 'placeholder') {
-        try {
-          const prompt = `Generate a JSON strategy configuration based on this description: "${description}"
+      try {
+        const prompt = `Generate a JSON strategy configuration based on this description: "${description}"
 Format your response ONLY as a JSON object matching this structure:
 {
   "htf": "H4" or "H1" or "M30",
@@ -149,18 +182,16 @@ Format your response ONLY as a JSON object matching this structure:
   "tp_levels": [{"rr": float, "close_pct": integer}]
 }`
 
-          const text = await callGemini(prompt, true, 300)
-          config = JSON.parse(text)
-        } catch (err) {
-          console.warn("Gemini failed to generate strategy configuration, using fallback presets:", err)
-        }
+        const text = await callGemini(prompt, true, 300)
+        const config = JSON.parse(text)
+        return NextResponse.json({
+          name: 'ai_custom_strategy',
+          preview: 'AI-Custom Scalper Profile',
+          config
+        })
+      } catch (err: any) {
+        return NextResponse.json({ error: `Failed to compile strategy config: ${err.message}` }, { status: 502 })
       }
-
-      return NextResponse.json({
-        name: 'ai_custom_strategy',
-        preview: 'AI-Custom Scalper Profile',
-        config
-      })
     }
 
   } catch (err: unknown) {

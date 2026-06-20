@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server'
 import { createClient } from 'redis'
 import { getCurrentUserId } from '@/lib/supabase-server'
 
+export const dynamic = 'force-dynamic'
+
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
 export async function POST(
   request: Request,
@@ -30,9 +33,22 @@ export async function POST(
     
     await client.disconnect()
     return NextResponse.json({ success: true, action })
-  } catch {
-    // Memory fallback behavior for development
-    return NextResponse.json({ success: true, action, fallback: true })
+  } catch (err: any) {
+    // Fallback to FastAPI backend when Redis is offline
+    try {
+      const endpoint = action === 'halt' ? 'stop' : action
+      const res = await fetch(`${PYTHON_API_URL}/trading/${endpoint}/${userId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      })
+      if (res.ok) {
+        return NextResponse.json({ success: true, action, fallback: true })
+      }
+      throw new Error(`FastAPI responded with status ${res.status}`)
+    } catch (fallbackErr: any) {
+      return NextResponse.json({ error: `Redis offline, FastAPI fallback failed: ${fallbackErr.message}` }, { status: 500 })
+    }
   }
 }
 
@@ -62,13 +78,26 @@ export async function GET(
       last_signal_at: new Date().toISOString(),
       trade_count: 24
     })
-  } catch {
-    // Default development state
-    return NextResponse.json({
-      running: true,
-      strategy: 'ema_crossover',
-      last_signal_at: new Date().toISOString(),
-      trade_count: 24
-    })
+  } catch (err: any) {
+    // Fallback to FastAPI backend when Redis is offline
+    try {
+      const res = await fetch(`${PYTHON_API_URL}/trading/status/${userId}`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000)
+      })
+      if (res.ok) {
+        const data = await res.json()
+        return NextResponse.json({
+          running: data.running,
+          strategy: 'ema_crossover',
+          last_signal_at: new Date().toISOString(),
+          trade_count: 24,
+          fallback: true
+        })
+      }
+      throw new Error(`FastAPI responded with status ${res.status}`)
+    } catch (fallbackErr: any) {
+      return NextResponse.json({ error: `Redis offline, FastAPI fallback failed: ${fallbackErr.message}` }, { status: 500 })
+    }
   }
 }

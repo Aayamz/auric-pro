@@ -61,37 +61,8 @@ You are a professional trading analyst. Be direct, precise, and concise (under 1
       })
     }
 
-    // 2. Mock Streaming Fallback for local testing when API key is missing
-    const encoder = new TextEncoder()
-    const lastUserMessage = messages[messages.length - 1]?.content?.toLowerCase() || ''
-    
-    let mockResponse = `Hello! I am your AURIC PRO Advisor. Based on the current market context, XAUUSD is showing strong consolidation. Your active strategy (${activeStrategy}) and risk profile are well aligned.`
-    
-    if (lastUserMessage.includes('should i trade') || lastUserMessage.includes('trade now')) {
-      mockResponse = `Looking at XAUUSD M15 timeframe, RSI is holding at 42.5 with a minor bullish bias. Since you have ${openPositionsCount} open positions, I recommend holding off on new execution to avoid compounding risk. Keep an eye on $1960 resistance.`
-    } else if (lastUserMessage.includes('risk') || lastUserMessage.includes('reduce risk')) {
-      mockResponse = `To protect your daily P&L ($${dailyPnl}), we can tighten the stop loss configurations. I've formulated a config change proposal. {"action":"set_config","key":"risk_pct","value":0.5} I will update your risk per trade to 0.5% immediately.`
-    } else if (lastUserMessage.includes('strategy') || lastUserMessage.includes('safest')) {
-      mockResponse = `Currently, XAUUSD is in a ${regime} state. I recommend switching to Bollinger Bounce for range containment. {"action":"set_config","key":"active_strategy","value":"bollinger_bounce"}`
-    }
-
-    const mockStream = new ReadableStream({
-      async start(controller) {
-        const words = mockResponse.split(' ')
-        for (const word of words) {
-          controller.enqueue(encoder.encode(word + ' '))
-          await new Promise((resolve) => setTimeout(resolve, 60))
-        }
-        controller.close()
-      }
-    })
-
-    return new Response(mockStream, {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Transfer-Encoding': 'chunked'
-      }
-    })
+    // Reject mock fallback stream if Anthropic API key is not configured
+    return NextResponse.json({ error: 'Anthropic AI API key is not configured. Live AI advisor mode is required.' }, { status: 400 })
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Stream connection error'

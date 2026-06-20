@@ -42,10 +42,11 @@ export default function PortfolioPage() {
   const [filterPair, setFilterPair] = useState('')
   const [filterStrategy, setFilterStrategy] = useState('')
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['portfolio-stats'],
     queryFn: async () => {
       const res = await fetch('/api/portfolio/stats')
+      if (!res.ok) return null
       return res.json()
     }
   })
@@ -103,12 +104,12 @@ export default function PortfolioPage() {
 
       {/* Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-md">
-        <StatCard label="Total P&L" value={`$${stats?.total_pnl?.toFixed(2) ?? '2,690.00'}`}
-          icon={TrendingUp} color={stats?.total_pnl >= 0 ? 'text-success' : 'text-error'} />
-        <StatCard label="Win Rate" value={`${stats?.win_rate?.toFixed(1) ?? '60.0'}%`} icon={Target} />
-        <StatCard label="Avg R:R" value={`${stats?.avg_rr?.toFixed(2) ?? '1.84'}R`} icon={BarChart2} />
-        <StatCard label="Total Trades" value={stats?.total_trades ?? 5} icon={FileText} />
-        <StatCard label="Best Day" value={`$${stats?.best_day?.toFixed(2) ?? '1,600.00'}`} icon={TrendingUp} color="text-success" />
+        <StatCard label="Total P&L" value={statsLoading ? '…' : `$${(stats?.total_pnl ?? 0).toFixed(2)}`}
+          icon={TrendingUp} color={(stats?.total_pnl ?? 0) >= 0 ? 'text-success' : 'text-error'} />
+        <StatCard label="Win Rate" value={statsLoading ? '…' : `${(stats?.win_rate ?? 0).toFixed(1)}%`} icon={Target} />
+        <StatCard label="Avg R:R" value={statsLoading ? '…' : `${(stats?.avg_rr ?? 0).toFixed(2)}R`} icon={BarChart2} />
+        <StatCard label="Total Trades" value={statsLoading ? '…' : (stats?.total_trades ?? 0)} icon={FileText} />
+        <StatCard label="Best Day" value={statsLoading ? '…' : `$${(stats?.best_day ?? 0).toFixed(2)}`} icon={TrendingUp} color="text-success" />
       </div>
 
       {/* Equity Curve Chart */}

@@ -21,6 +21,16 @@ AURIC PRO features a hybrid multi-service architecture:
 
 ---
 
+## Connection Reliability & Fallbacks
+
+To ensure flawless operation in environments where Redis or network drops may occur, AURIC PRO implements:
+- **Redis-Offline Fallback Relay**: If Redis is unavailable, the Next.js server falls back to direct duplex WebSockets connected to FastAPI, ensuring commands reach the bridge instantly.
+- **Unified Dual-Broadcasting**: FastAPI broadcasts ticks, position updates, and trade executions simultaneously to both Redis and active WebSocket connections, eliminating blackouts due to client-server connection-mode mismatches.
+- **Robust Type Parsing**: Order command inputs (like `lots`, `ticket`, `sl`, and `tp`) are safely parsed and cast to proper numerical formats (`float`, `int`) on the Python backend, preventing raw JSON types from causing thread crashes.
+- **Client Connection Lifecycle Management**: The frontend Socket.io client reference is held in a component-level `useRef` to prevent unmount race conditions (e.g. navigating out of Scalper mode) from closing active sibling connections.
+
+---
+
 ## Deployment Modes for MT5 Bridge
 
 ### 1. Cloud Mode (Default for normal users)

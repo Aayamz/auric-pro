@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000'
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
 export async function GET(
   request: Request,
@@ -11,36 +11,24 @@ export async function GET(
 
   try {
     const res = await fetch(`${PYTHON_API_URL}/price/${pair}`, { cache: 'no-store' })
-    if (res.ok) {
-      const data = await res.json()
-      if (data && data.bid) {
-        const bid = Number(data.bid)
-        const ask = Number(data.ask)
-        const spread = Number((ask - bid).toFixed(5))
-        return NextResponse.json({
-          pair,
-          bid,
-          ask,
-          spread,
-          time: Date.now()
-        })
-      }
+    if (!res.ok) {
+      throw new Error(`FastAPI price endpoint returned status ${res.status}`)
     }
-  } catch {
-    // Suppress and fallback
+    const data = await res.json()
+    if (data && data.bid) {
+      const bid = Number(data.bid)
+      const ask = Number(data.ask)
+      const spread = Number((ask - bid).toFixed(5))
+      return NextResponse.json({
+        pair,
+        bid,
+        ask,
+        spread,
+        time: Date.now()
+      })
+    }
+    throw new Error('Invalid or incomplete price data received from FastAPI backend')
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'FastAPI execution engine is offline' }, { status: 502 })
   }
-
-  // Fallback values if bridge/FastAPI is offline
-  const basePrice = 1950.0 + (Math.random() - 0.5) * 5
-  const bid = Number(basePrice.toFixed(2))
-  const ask = Number((basePrice + 0.35).toFixed(2))
-  const spread = Number((ask - bid).toFixed(2))
-
-  return NextResponse.json({
-    pair,
-    bid,
-    ask,
-    spread,
-    time: Date.now()
-  })
 }

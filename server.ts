@@ -8,6 +8,8 @@ import { Server, Socket } from 'socket.io'
 import { createClient } from 'redis'
 import next from 'next'
 import { EventEmitter } from 'events'
+import { spawn, ChildProcess } from 'child_process'
+import path from 'path'
 
 
 const dev = process.env.NODE_ENV !== 'production'
@@ -16,6 +18,53 @@ const handle = app.getRequestHandler()
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+
+// ─── Auto-start FastAPI backend ──────────────────────────────────────────────
+let fastapiProcess: ChildProcess | null = null
+
+function startFastAPI() {
+  const backendDir = path.join(process.cwd(), 'backend')
+  const mainPy = path.join(backendDir, 'main.py')
+  
+  console.log('[Server] Starting FastAPI backend...')
+  fastapiProcess = spawn('python', [mainPy], {
+    cwd: backendDir,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    shell: true
+  })
+
+  fastapiProcess.stdout?.on('data', (data: Buffer) => {
+    const msg = data.toString().trim()
+    if (msg) console.log(`[FastAPI] ${msg}`)
+  })
+
+  fastapiProcess.stderr?.on('data', (data: Buffer) => {
+    const msg = data.toString().trim()
+    if (msg) console.warn(`[FastAPI] ${msg}`)
+  })
+
+  fastapiProcess.on('exit', (code) => {
+    console.warn(`[FastAPI] Process exited with code ${code}. Restarting in 3s...`)
+    fastapiProcess = null
+    setTimeout(startFastAPI, 3000)
+  })
+
+  fastapiProcess.on('error', (err) => {
+    console.error(`[FastAPI] Failed to start: ${err.message}`)
+  })
+}
+
+// Check if FastAPI is already running before starting our own
+async function isFastAPIRunning(): Promise<boolean> {
+  try {
+    const res = await fetch(`${PYTHON_API_URL}/docs`, { signal: AbortSignal.timeout(2000) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
 
 // Local in-memory pub-sub fallback if Redis is not running
 const localPubSub = new EventEmitter()
@@ -88,6 +137,15 @@ const supabaseSocketAuthMiddleware = async (socket: Socket, nextFn: (err?: Error
 
 app.prepare().then(async () => {
   await initRedis()
+
+  // Auto-start FastAPI if not already running
+  if (!(await isFastAPIRunning())) {
+    startFastAPI()
+    // Give FastAPI a moment to start before proceeding
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  } else {
+    console.log('[Server] FastAPI already running.')
+  }
 
   const server = createServer((req, res) => {
     return handle(req, res)
@@ -214,4 +272,16 @@ app.prepare().then(async () => {
   server.listen(PORT, () => {
     console.log(`> Ready on http://localhost:${PORT}`)
   })
+
+  // Cleanup on exit
+  const cleanup = () => {
+    console.log('[Server] Shutting down...')
+    if (fastapiProcess) {
+      fastapiProcess.kill()
+      fastapiProcess = null
+    }
+    process.exit(0)
+  }
+  process.on('SIGINT', cleanup)
+  process.on('SIGTERM', cleanup)
 })

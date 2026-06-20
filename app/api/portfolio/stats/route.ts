@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 
+// Closed statuses as written by both the old bridge and the new MT5 Python bridge
+const CLOSED_STATUSES = ['closed', 'CLOSED', 'completed', 'COMPLETED', 'SL_HIT', 'TP1_HIT', 'TP2_HIT', 'TP3_HIT']
+
 export async function GET() {
   const userId = await getCurrentUserId()
   if (!userId) {
@@ -13,7 +16,7 @@ export async function GET() {
       .from('trades')
       .select('pnl_usd, pnl_r, opened_at')
       .eq('user_id', userId)
-      .eq('status', 'closed')
+      .in('status', CLOSED_STATUSES)
 
     if (!trades || trades.length === 0) {
       return NextResponse.json({
@@ -34,14 +37,7 @@ export async function GET() {
     const best_day = Math.max(...Object.values(byDay), 0)
 
     return NextResponse.json({ total_pnl, win_rate, avg_rr, total_trades: trades.length, best_day })
-  } catch {
-    // Fallback mock stats
-    return NextResponse.json({
-      total_pnl: 2690.00,
-      win_rate: 60.0,
-      avg_rr: 1.84,
-      total_trades: 5,
-      best_day: 1600.00
-    })
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Database connection error' }, { status: 500 })
   }
 }

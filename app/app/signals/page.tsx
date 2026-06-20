@@ -1,9 +1,10 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { ChevronRight, X } from 'lucide-react'
+import { ChevronRight, X, Radio, RefreshCw } from 'lucide-react'
+import { useStore } from '@/store'
 
 interface SignalItem {
   id: string
@@ -29,8 +30,11 @@ export default function SignalsPage() {
   const [aiExplanation, setAiExplanation] = useState('')
   const [loadingAi, setLoadingAi] = useState(false)
 
-  // Query Signals list
-  const { data: signalsList = [], refetch } = useQuery<SignalItem[]>({
+  // Live signals from WebSocket (Zustand store)
+  const storeSignals = useStore(s => s.signals) as SignalItem[]
+
+  // Query Signals list from DB
+  const { data: dbSignals = [], refetch, isFetching } = useQuery<SignalItem[]>({
     queryKey: ['signals', filterPair, filterStrategy, filterStatus],
     queryFn: async () => {
       const query = new URLSearchParams()
@@ -38,9 +42,28 @@ export default function SignalsPage() {
       if (filterStrategy) query.append('strategy', filterStrategy)
       if (filterStatus) query.append('status', filterStatus)
       const res = await fetch(`/api/signals?${query.toString()}`)
+      if (!res.ok) return []
       return res.json()
     }
   })
+
+  // Merge store (live) signals with DB signals — deduplicate by id, live signals take priority
+  const signalsList = useMemo(() => {
+    const dbMap = new Map(dbSignals.map(s => [s.id, s]))
+
+    // Apply client-side filters to store signals
+    const filteredStore = storeSignals.filter(s => {
+      if (filterPair && s.pair !== filterPair) return false
+      if (filterStrategy && s.strategy !== filterStrategy) return false
+      if (filterStatus && s.status !== filterStatus) return false
+      return true
+    })
+
+    // Live signals come first, then DB signals not already in the live list
+    const liveIds = new Set(filteredStore.map(s => s.id))
+    const dbOnly = dbSignals.filter(s => !liveIds.has(s.id))
+    return [...filteredStore, ...dbOnly]
+  }, [storeSignals, dbSignals, filterPair, filterStrategy, filterStatus])
 
   // Open Drawer and trigger AI Explanation lazily
   const handleRowClick = async (signal: SignalItem) => {
@@ -71,17 +94,30 @@ export default function SignalsPage() {
     { name: 'Trend Follower', winRate: 66.8, signals: 15 }
   ]
 
+  const liveCount = storeSignals.length
+
   return (
     <div className="space-y-lg flex flex-col h-full relative">
       
       {/* Title / Info Header */}
-      <div className="flex flex-col">
-        <h2 className="font-sans text-display-lg font-semibold text-ink tracking-tight">
-          Signal Intelligence
-        </h2>
-        <p className="font-sans text-body-sm text-body-text mt-xxs">
-          Review live strategy triggers, analytical confidence indices, and AI justifications.
-        </p>
+      <div className="flex items-start justify-between">
+        <div className="flex flex-col">
+          <h2 className="font-sans text-display-lg font-semibold text-ink tracking-tight">
+            Signal Intelligence
+          </h2>
+          <p className="font-sans text-body-sm text-body-text mt-xxs">
+            Review live strategy triggers, analytical confidence indices, and AI justifications.
+          </p>
+        </div>
+        {liveCount > 0 && (
+          <div className="flex items-center gap-xs px-sm py-xxs bg-success/10 border border-success/30 rounded-pill">
+            <span className="w-xxs h-xxs rounded-full bg-success animate-pulse inline-block" />
+            <span className="font-mono text-[10px] text-success uppercase font-semibold">
+              {liveCount} live signal{liveCount !== 1 ? 's' : ''}
+            </span>
+            <Radio className="w-xxs h-xxs text-success" />
+          </div>
+        )}
       </div>
 
       {/* Filter Bar */}
@@ -130,9 +166,11 @@ export default function SignalsPage() {
         </div>
         <button
           onClick={() => refetch()}
-          className="bg-primary text-on-primary font-sans text-button-md font-medium px-md h-[36px] rounded-sm hover:opacity-90 transition-opacity mt-sm md:mt-0"
+          disabled={isFetching}
+          className="bg-primary text-on-primary font-sans text-button-md font-medium px-md h-[36px] rounded-sm hover:opacity-90 transition-opacity mt-sm md:mt-0 flex items-center gap-xs disabled:opacity-60"
         >
-          Query Database
+          <RefreshCw className={`w-xxs h-xxs ${isFetching ? 'animate-spin' : ''}`} />
+          {isFetching ? 'Querying…' : 'Query Database'}
         </button>
       </div>
 
@@ -158,14 +196,20 @@ export default function SignalsPage() {
               {signalsList.length > 0 ? (
                 signalsList.map((sig) => {
                   const isLive = sig.status === 'LIVE'
+                  const isFromStore = storeSignals.some(s => s.id === sig.id)
                   return (
                     <tr
                       key={sig.id}
                       onClick={() => handleRowClick(sig)}
                       className="hover:bg-canvas-soft transition-colors cursor-pointer text-body-sm text-body-text"
                     >
-                      <td className="p-sm font-mono text-caption-mono text-mute">
-                        {new Date(sig.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      <td className="p-sm font-mono text-caption-mono text-mute whitespace-nowrap">
+                        <span className="flex items-center gap-xs">
+                          {isFromStore && (
+                            <span className="w-[5px] h-[5px] rounded-full bg-success animate-pulse inline-block shrink-0" title="Live signal" />
+                          )}
+                          {new Date(sig.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
                       </td>
                       <td className="p-sm font-semibold text-ink">{sig.pair}</td>
                       <td className="p-sm">
@@ -202,8 +246,14 @@ export default function SignalsPage() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={10} className="text-center py-xl font-sans text-body-sm text-mute">
-                    No signals matched your criteria.
+                  <td colSpan={10} className="text-center py-xl">
+                    <div className="flex flex-col items-center gap-xs text-mute">
+                      <Radio className="w-sm h-sm opacity-30" />
+                      <span className="font-sans text-body-sm">No signals matched your criteria.</span>
+                      <span className="font-mono text-caption-mono text-[10px]">
+                        Signals will appear here when the trading engine generates them, or click &quot;Query Database&quot; to fetch historical ones.
+                      </span>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -286,6 +336,19 @@ export default function SignalsPage() {
                 <span>Confidence Index</span>
                 <span className="font-mono text-caption-mono text-success font-semibold">{selectedSignal.confidence}%</span>
               </div>
+              {selectedSignal.tp_levels && selectedSignal.tp_levels.length > 0 && (
+                <div className="border-t border-hairline pt-xs">
+                  <span className="block font-mono text-[10px] text-mute mb-xs">TAKE PROFIT LEVELS</span>
+                  <div className="space-y-xxs">
+                    {selectedSignal.tp_levels.map((tp, i) => (
+                      <div key={i} className="flex justify-between">
+                        <span className="font-mono text-[10px] text-mute">TP{i+1} ({tp.rr}R)</span>
+                        <span className="font-mono text-caption-mono text-success font-semibold">${tp.price?.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* AI Explanation Section */}

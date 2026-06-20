@@ -406,18 +406,52 @@ async def run_bridge(ws_url, token, is_mock, creds=None):
                     )
                 else:
                     print("Running bridge in LIVE MT5 mode...")
-                    # Initialize MT5
                     if not creds:
                         creds = load_credentials()
-                    if not mt5.initialize(
-                        login=creds["login"],
-                        server=creds["server"],
-                        password=creds["password"]
-                    ):
-                        print(f"MT5 Initialization failed: {mt5.last_error()}")
-                        mt5.shutdown()
-                        sys.exit(1)
                     
+                    # Step 1: Initialize MT5 terminal connection
+                    if not mt5.initialize(timeout=10000):
+                        print(f"MT5 initialize() failed: {mt5.last_error()}. Falling back to MOCK mode.")
+                        mt5.shutdown()
+                        is_mock = True
+                        await ws.send(json.dumps({
+                            "type": "bridge_hello",
+                            "version": "1.0",
+                            "is_mock": True
+                        }))
+                        await asyncio.gather(
+                            mock_price_stream(ws),
+                            mock_position_stream(ws),
+                            command_listener(ws, is_mock=True)
+                        )
+                        return
+                    
+                    # Step 2: Authenticate with credentials
+                    if not mt5.login(
+                        login=creds["login"],
+                        password=creds["password"],
+                        server=creds["server"],
+                        timeout=10000
+                    ):
+                        print(f"MT5 login() failed: {mt5.last_error()}. Falling back to MOCK mode.")
+                        mt5.shutdown()
+                        is_mock = True
+                        await ws.send(json.dumps({
+                            "type": "bridge_hello",
+                            "version": "1.0",
+                            "is_mock": True
+                        }))
+                        await asyncio.gather(
+                            mock_price_stream(ws),
+                            mock_position_stream(ws),
+                            command_listener(ws, is_mock=True)
+                        )
+                        return
+
+                    acc_info = mt5.account_info()
+                    if acc_info:
+                        print(f"MT5 connected — login={acc_info.login}, server={acc_info.server}, balance={acc_info.balance}, equity={acc_info.equity}")
+
                     await asyncio.gather(
                         real_price_stream(ws),
                         real_position_stream(ws),

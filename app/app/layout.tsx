@@ -6,6 +6,8 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useStore } from '@/store'
 import { useLiveData } from '@/hooks/useLiveData'
 import { supabase } from '@/lib/supabase'
+import { ToastProvider } from '@/components/Toast'
+import { BrokerLinkModal } from '@/components/BrokerLinkModal'
 import { 
   LayoutDashboard, 
   Radio, 
@@ -16,7 +18,8 @@ import {
   ShieldAlert, 
   Settings, 
   LogOut,
-  Zap
+  Zap,
+  Loader2
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -37,6 +40,34 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   
   // Activate live websocket listener at layout level
   useLiveData()
+
+  const [health, setHealth] = React.useState<any>(null)
+  const [checkingHealth, setCheckingHealth] = React.useState(true)
+  const [showBrokerModal, setShowBrokerModal] = React.useState(false)
+  const [brokerChecked, setBrokerChecked] = React.useState(false)
+  const brokerCheckedRef = React.useRef(false)
+
+  const checkHealth = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/health')
+      const data = await res.json()
+      if (res.ok && data.ok) {
+        setHealth(null)
+      } else {
+        setHealth(data)
+      }
+    } catch (err: any) {
+      setHealth({
+        supabase: { connected: false, message: 'Could not contact health check service.' },
+        redis: { connected: false, message: 'Network offline.' },
+        pythonApi: { connected: false, message: 'Network offline.' },
+        razorpay: { configured: false, message: 'Network offline.' },
+        ok: false
+      })
+    } finally {
+      setCheckingHealth(false)
+    }
+  }, [])
   
   const { 
     bridgeStatus, 
@@ -73,6 +104,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   ])
 
   useEffect(() => {
+    checkHealth()
+    const healthInterval = setInterval(checkHealth, 5000)
+
     supabase.auth.getUser()
       .then(({ data: { user } }) => {
         if (user) {
@@ -103,17 +137,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         setSubscription(data)
       }).catch(() => {})
 
-    // Poll bridge connection status
-    const checkBridge = () => {
-      fetch('/api/bridge/status')
-        .then(res => res.json())
-        .then(data => {
-          setBridgeStatus(data.connected ? 'connected' : 'disconnected')
-        })
-        .catch(() => setBridgeStatus('disconnected'))
+    // Poll bridge connection status + broker link check
+    const checkBridge = async () => {
+      try {
+        const res = await fetch('/api/bridge/status')
+        const data = await res.json()
+        setBridgeStatus(data.connected ? 'connected' : 'disconnected')
+        // Show broker link modal on first check if not connected
+        if (!brokerCheckedRef.current) {
+          brokerCheckedRef.current = true
+          setBrokerChecked(true)
+          if (!data.connected) {
+            setShowBrokerModal(true)
+          }
+        }
+      } catch {
+        setBridgeStatus('disconnected')
+      }
     }
     checkBridge()
-    const bridgeInterval = setInterval(checkBridge, 3000)
+    const bridgeInterval = setInterval(checkBridge, 5000)
 
     // Poll AI Commentary every 5 mins
     const fetchCommentary = () => {
@@ -129,13 +172,131 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return () => {
       clearInterval(interval)
       clearInterval(bridgeInterval)
+      clearInterval(healthInterval)
     }
-  }, [setUser, setBotRunning, setBridgeStatus])
+  }, [setUser, setBotRunning, setBridgeStatus, checkHealth])
+
+  const handleBrokerConnected = (info: any) => {
+    setShowBrokerModal(false)
+    setBridgeStatus('connected')
+  }
+
+  const handleBrokerSkip = () => {
+    setShowBrokerModal(false)
+  }
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
     setUser(null)
     router.push('/auth/login')
+  }
+
+  if (health) {
+    return (
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-canvas-soft p-lg overflow-y-auto text-ink">
+        {/* Ambient mesh gradient background spotlight */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] bg-gradient-to-r from-[#007cf0] via-[#7928ca] to-[#ff4d4d] opacity-[0.08] blur-[80px] rounded-full pointer-events-none" />
+
+        <div className="bg-canvas border border-hairline rounded-md p-xl shadow-level-5 max-w-[640px] w-full space-y-lg relative overflow-hidden flex flex-col">
+          <div className="space-y-xxs">
+            <div className="flex items-center gap-xs">
+              <span className="font-mono text-caption-mono text-mute border border-hairline px-xxs py-[2px] rounded-md uppercase font-semibold">Connection Guard</span>
+              <span className="font-mono text-[9px] bg-error-soft text-error px-xxs py-[2px] rounded-sm font-semibold uppercase">Live Mode Enforced</span>
+            </div>
+            <h1 className="font-sans text-display-md font-semibold text-ink mt-xs">Connection Diagnostic Required</h1>
+            <p className="font-sans text-body-sm text-body-text">
+              AURIC PRO is running in strictly live data mode. We detected that one or more core cloud/local services are disconnected. Please verify your environment configurations in <code className="font-mono text-xs text-ink bg-canvas-soft-2 px-xxs rounded-xs border border-hairline">.env.local</code>.
+            </p>
+          </div>
+
+          <div className="border-t border-hairline pt-md space-y-md">
+            {/* Supabase status row */}
+            <div className="p-sm bg-canvas-soft border border-hairline rounded-sm flex flex-col gap-xxs">
+              <div className="flex justify-between items-center">
+                <span className="font-sans text-body-sm font-semibold text-ink">Database & Auth (Supabase)</span>
+                <span className="flex items-center gap-xs">
+                  <span className={`w-xs h-xs rounded-full inline-block ${health.supabase.connected ? 'bg-success' : 'bg-error animate-pulse'}`} />
+                  <span className="font-mono text-[10px] text-mute font-bold uppercase">{health.supabase.connected ? 'Connected' : 'Offline'}</span>
+                </span>
+              </div>
+              {!health.supabase.connected && (
+                <p className="font-mono text-[11px] text-error-deep leading-relaxed mt-xxs border-l border-error/30 pl-xs">
+                  {health.supabase.message || 'Verification query failed. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'}
+                </p>
+              )}
+            </div>
+
+            {/* Redis status row */}
+            <div className="p-sm bg-canvas-soft border border-hairline rounded-sm flex flex-col gap-xxs">
+              <div className="flex justify-between items-center">
+                <span className="font-sans text-body-sm font-semibold text-ink">Cache & Event Broker (Redis)</span>
+                <span className="flex items-center gap-xs">
+                  <span className={`w-xs h-xs rounded-full inline-block ${health.redis.connected ? 'bg-success' : 'bg-error animate-pulse'}`} />
+                  <span className="font-mono text-[10px] text-mute font-bold uppercase">{health.redis.connected ? 'Connected' : 'Offline'}</span>
+                </span>
+              </div>
+              {!health.redis.connected && (
+                <p className="font-mono text-[11px] text-error-deep leading-relaxed mt-xxs border-l border-error/30 pl-xs">
+                  {health.redis.message || 'Unable to ping Redis server. Make sure Redis service is running locally on port 6379 or configured in REDIS_URL.'}
+                </p>
+              )}
+            </div>
+
+            {/* FastAPI status row */}
+            <div className="p-sm bg-canvas-soft border border-hairline rounded-sm flex flex-col gap-xxs">
+              <div className="flex justify-between items-center">
+                <span className="font-sans text-body-sm font-semibold text-ink">Execution Engine (FastAPI)</span>
+                <span className="flex items-center gap-xs">
+                  <span className={`w-xs h-xs rounded-full inline-block ${health.pythonApi.connected ? 'bg-success' : 'bg-error animate-pulse'}`} />
+                  <span className="font-mono text-[10px] text-mute font-bold uppercase">{health.pythonApi.connected ? 'Connected' : 'Offline'}</span>
+                </span>
+              </div>
+              {!health.pythonApi.connected && (
+                <p className="font-mono text-[11px] text-error-deep leading-relaxed mt-xxs border-l border-error/30 pl-xs">
+                  {health.pythonApi.message || 'FastAPI backend is offline. Start the Python server inside /backend (python main.py) on Port 8000.'}
+                </p>
+              )}
+            </div>
+
+            {/* Razorpay status row */}
+            <div className="p-sm bg-canvas-soft border border-hairline rounded-sm flex flex-col gap-xxs">
+              <div className="flex justify-between items-center">
+                <span className="font-sans text-body-sm font-semibold text-ink">Payment Gateway (Razorpay API Keys)</span>
+                <span className="flex items-center gap-xs">
+                  <span className={`w-xs h-xs rounded-full inline-block ${health.razorpay.configured ? 'bg-success' : 'bg-warning animate-pulse'}`} />
+                  <span className="font-mono text-[10px] text-mute font-bold uppercase">{health.razorpay.configured ? 'Configured' : 'Missing'}</span>
+                </span>
+              </div>
+              {!health.razorpay.configured && (
+                <p className="font-mono text-[11px] text-warning-deep leading-relaxed mt-xxs border-l border-warning/40 pl-xs">
+                  {health.razorpay.message || 'Razorpay keys or plans are missing or set to placeholder templates. Populate them in .env.local.'}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="border-t border-hairline pt-md flex justify-between items-center">
+            <span className="font-mono text-[10px] text-mute uppercase">Enforced since v2.0 • live mode</span>
+            <button
+              onClick={() => {
+                setCheckingHealth(true)
+                checkHealth()
+              }}
+              disabled={checkingHealth}
+              className="bg-primary text-on-primary font-sans text-button-md font-semibold px-lg h-[40px] rounded-sm hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center gap-xxs"
+            >
+              {checkingHealth ? (
+                <>
+                  <Loader2 className="w-xxs h-xxs animate-spin" /> Verifying Connection...
+                </>
+              ) : (
+                'Retry Connection'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   // Minimal layout for full-screen scalper page (no sidebar/header/commentary)
@@ -146,6 +307,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
+    <ToastProvider>
+    {showBrokerModal && (
+      <BrokerLinkModal
+        onConnected={handleBrokerConnected}
+        onSkip={handleBrokerSkip}
+      />
+    )}
     <div className="flex-1 flex min-h-screen bg-canvas-soft">
       
       {/* 1. Left Sidebar Navigation */}
@@ -214,15 +382,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           
           {/* Real-time Status Pills */}
           <div className="flex items-center gap-sm">
-            {/* Bridge Connection Status */}
-            <div className="flex items-center gap-xs px-sm py-[4px] border border-hairline rounded-pill bg-canvas-soft shadow-level-2">
+            {/* Bridge Connection Status — click to connect when offline */}
+            <button
+              onClick={() => bridgeStatus !== 'connected' && setShowBrokerModal(true)}
+              className={`flex items-center gap-xs px-sm py-[4px] border rounded-pill bg-canvas-soft shadow-level-2 transition-colors ${
+                bridgeStatus !== 'connected'
+                  ? 'border-error/40 hover:bg-error-soft cursor-pointer'
+                  : 'border-hairline cursor-default'
+              }`}
+              title={bridgeStatus !== 'connected' ? 'Click to connect MT5 broker account' : 'MT5 bridge connected'}
+            >
               <span className={`w-xs h-xs rounded-full inline-block ${
                 bridgeStatus === 'connected' ? 'bg-success animate-pulse' : 'bg-error animate-pulse'
               }`} />
-              <span className="font-mono text-[10px] text-body-text uppercase font-semibold">
-                BRIDGE: {bridgeStatus}
+              <span className={`font-mono text-[10px] uppercase font-semibold ${
+                bridgeStatus === 'connected' ? 'text-body-text' : 'text-error'
+              }`}>
+                {bridgeStatus === 'connected' ? 'BRIDGE: LIVE' : 'CONNECT MT5 ↗'}
               </span>
-            </div>
+            </button>
 
             {/* Trading Loop Auto-execution status */}
             <div className="flex items-center gap-xs px-sm py-[4px] border border-hairline rounded-pill bg-canvas-soft shadow-level-2">
@@ -282,5 +460,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       </div>
     </div>
+    </ToastProvider>
   )
 }

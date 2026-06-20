@@ -1,38 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
-import { cookies } from 'next/headers'
-import { createServerClient } from '@supabase/ssr'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder-url.supabase.co'
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'
-
-async function getSessionToken(): Promise<string> {
-  try {
-    const cookieStore = await cookies()
-    const ssrClient = createServerClient(
-      supabaseUrl,
-      supabaseAnonKey,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              )
-            } catch {}
-          },
-        },
-      }
-    )
-    const { data: { session } } = await ssrClient.auth.getSession()
-    return session?.access_token || ''
-  } catch {
-    return ''
-  }
-}
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
 export async function GET() {
   const userId = await getCurrentUserId()
@@ -44,7 +13,6 @@ export async function GET() {
     const supabase = getSupabaseServerClient()
     const { data } = await supabase.from('broker_accounts').select('login, server, credentials_enc').eq('user_id', userId).single()
     
-    // Cloud mode is active if credentials_enc is not empty
     const cloudMode = !!data?.credentials_enc
     
     return NextResponse.json({ 
@@ -64,65 +32,72 @@ export async function PUT(req: NextRequest) {
   }
   const { login, password, server, cloud_mode } = await req.json()
 
-  try {
-    const supabase = getSupabaseServerClient()
+  const numericLogin = parseInt(login)
+  if (!login || isNaN(numericLogin) || numericLogin <= 0) {
+    return NextResponse.json({ error: 'MT5 Login must be a valid numeric account number' }, { status: 400 })
+  }
+  if (!password || !server) {
+    return NextResponse.json({ error: 'Password and server are required' }, { status: 400 })
+  }
 
-    if (cloud_mode) {
-      const token = await getSessionToken()
-      // Call FastAPI backend to encrypt credentials and start the cloud bridge
+  // Step 1: Always save credentials to Supabase directly from Next.js
+  // This ensures credentials are persisted even if FastAPI is down
+  const supabase = getSupabaseServerClient()
+  const { error: dbError } = await supabase.from('broker_accounts').upsert({
+    user_id: userId,
+    platform: 'mt5',
+    server,
+    login: numericLogin,
+    credentials_enc: password,  // stored as plaintext initially; FastAPI will encrypt and update
+    is_connected: false,
+  }, { onConflict: 'user_id' })
+
+  if (dbError) {
+    console.error("Failed to save broker credentials to database:", dbError.message)
+    return NextResponse.json({ error: `Failed to save credentials: ${dbError.message}` }, { status: 500 })
+  }
+
+  // Step 2: Call FastAPI to encrypt credentials and start the cloud bridge
+  if (cloud_mode) {
+    try {
+      const setupRes = await fetch(`${PYTHON_API_URL}/bridge/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          user_id: userId, 
+          login: numericLogin, 
+          password, 
+          server 
+        }),
+        signal: AbortSignal.timeout(5000)
+      })
+      if (!setupRes.ok) {
+        const errBody = await setupRes.text()
+        console.error("FastAPI bridge setup failed:", setupRes.status, errBody)
+      }
+    } catch (err: any) {
+      console.error("FastAPI bridge setup call failed:", err.message)
+    }
+  } else {
+    // Local mode: stop any cloud bridge, optionally notify local bridge
+    try {
+      await fetch(`${PYTHON_API_URL}/bridge/stop/${userId}`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(2000)
+      })
+    } catch {}
+
+    if (password) {
       try {
-        await fetch('http://localhost:8000/bridge/setup', {
+        await fetch('http://localhost:8001/credentials', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            user_id: userId, 
-            login: parseInt(login), 
-            password, 
-            server, 
-            token 
-          }),
-          signal: AbortSignal.timeout(3000)
-        })
-      } catch (err: any) {
-        console.error("FastAPI bridge setup call failed:", err.message)
-      }
-    } else {
-      // Local Mode: save basic broker info to DB (empty credentials_enc)
-      await supabase.from('broker_accounts').upsert({
-        user_id: userId,
-        platform: 'mt5',
-        server,
-        login: parseInt(login),
-        credentials_enc: '',
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id' })
-
-      // Tell FastAPI to stop any active cloud bridge subprocess for this user
-      try {
-        await fetch(`http://localhost:8000/bridge/stop/${userId}`, {
-          method: 'POST',
+          body: JSON.stringify({ login: numericLogin, password, server }),
           signal: AbortSignal.timeout(2000)
         })
       } catch {}
-
-      // Backward compatibility for local bridge if running locally on port 8001
-      if (password) {
-        try {
-          await fetch('http://localhost:8001/credentials', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ login: parseInt(login), password, server }),
-            signal: AbortSignal.timeout(2000)
-          })
-        } catch {
-          // Local bridge listener offline
-        }
-      }
     }
-  } catch (err: any) {
-    console.error("Failed to save broker configuration:", err.message)
   }
 
   return NextResponse.json({ success: true })
 }
-

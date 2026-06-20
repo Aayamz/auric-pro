@@ -6,6 +6,7 @@ import { useStore, MTPosition, Signal } from '@/store'
 import { useLiveData } from '@/hooks/useLiveData'
 import { createChart, IChartApi, ISeriesApi, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts'
 import { Edit2 } from 'lucide-react'
+import { useToast } from '@/components/Toast'
 
 export default function DashboardPage() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
@@ -17,6 +18,7 @@ export default function DashboardPage() {
   const aiEntryLineRef = useRef<any>(null)
   
   const { openTrade, closeTrade, modifyTrade } = useLiveData()
+  const { addToast } = useToast()
   const { 
     prices, 
     positions, 
@@ -41,6 +43,9 @@ export default function DashboardPage() {
     queryKey: ['ohlcv', selectedPair, selectedTimeframe],
     queryFn: async () => {
       const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200`)
+      if (!res.ok) {
+        throw new Error('Failed to fetch live market data')
+      }
       return res.json()
     },
     refetchInterval: 10000 // Poll every 10s as a fallback
@@ -129,7 +134,7 @@ export default function DashboardPage() {
 
   // Feed Data and Draw Overlays on Chart
   useEffect(() => {
-    if (!candleSeriesRef.current || !ohlcvData || ohlcvData.length === 0) return
+    if (!candleSeriesRef.current || !Array.isArray(ohlcvData) || ohlcvData.length === 0) return
 
     // Set Candlestick Data
     candleSeriesRef.current.setData(ohlcvData)
@@ -227,14 +232,36 @@ export default function DashboardPage() {
   }, [selectedPair, selectedTimeframe, refetchOhlcv])
 
   const triggerOpenTrade = async (signal: Signal) => {
-    // Calls socket client execution from live hook
-    openTrade({
-      pair: signal.pair,
-      direction: signal.direction,
-      lots: 0.05, // Standard lots
-      sl: signal.sl_price,
-      tp: signal.tp_levels?.[0]?.price || (signal.entry_price + 10)
-    })
+    try {
+      addToast({
+        type: 'info',
+        title: 'Executing Signal',
+        message: `Sending ${signal.direction} order for ${signal.pair}...`,
+        duration: 3000
+      })
+      const result = await openTrade({
+        pair: signal.pair,
+        direction: signal.direction,
+        lots: 0.05, // Standard lots
+        sl: signal.sl_price,
+        tp: signal.tp_levels?.[0]?.price || (signal.entry_price + 10)
+      })
+      addToast({
+        type: 'success',
+        title: 'Signal Executed',
+        message: result.ticket
+          ? `Ticket #${result.ticket} opened successfully`
+          : result.message || 'Order executed successfully on MT5',
+        duration: 5000
+      })
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Execution Failed',
+        message: err.message || 'MT5 bridge could not execute trade.',
+        duration: 7000
+      })
+    }
   }
 
   const handleOpenModify = (position: MTPosition) => {

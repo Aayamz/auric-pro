@@ -53,7 +53,7 @@ export async function GET() {
     const { data: brokers } = await supabase.from('broker_accounts').select('user_id, login, server, credentials_enc')
 
     const usersList: any[] = []
-    const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000'
+    const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
     for (const b of (brokers || [])) {
       const sub = (subs || []).find(s => s.user_id === b.user_id)

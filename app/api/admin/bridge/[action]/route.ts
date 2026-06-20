@@ -51,7 +51,7 @@ export async function POST(
     return NextResponse.json({ error: 'Missing user_id' }, { status: 400 })
   }
 
-  const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000'
+  const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
   try {
     let res
