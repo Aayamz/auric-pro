@@ -770,6 +770,22 @@ async def bridge_endpoint(websocket: WebSocket):
 
     await bridge_manager.connect(user_id, websocket)
     
+    # Broadcast bridge_status: true immediately
+    await broadcast_to_client(user_id, {
+        "type": "bridge_status",
+        "connected": True
+    })
+    
+    # Sync history instantly upon bridge connection
+    acc = await fetch_user_broker_account(user_id)
+    if acc and acc.get("credentials_enc"):
+        login = acc.get("login")
+        server = acc.get("server")
+        password = decrypt_password(acc.get("credentials_enc"))
+        if password:
+            is_mock = direct_loop_mock.get(user_id, not MT5_AVAILABLE)
+            asyncio.create_task(sync_mt5_history(user_id, login, password, server, mock=is_mock))
+
     # Start background Redis task to listen for commands and send to the bridge
     listener_task = asyncio.create_task(redis_command_listener(user_id, websocket))
     
@@ -849,6 +865,11 @@ async def bridge_endpoint(websocket: WebSocket):
     finally:
         listener_task.cancel()
         bridge_manager.disconnect(user_id)
+        # Broadcast bridge_status: false immediately on disconnect
+        await broadcast_to_client(user_id, {
+            "type": "bridge_status",
+            "connected": False
+        })
 
 def send_order_with_filling_fallback(request):
     if not MT5_AVAILABLE:
@@ -1364,6 +1385,40 @@ async def get_bridge_status(user_id: str):
     }
 
 
+def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
+    now_ms = int(time.time() * 1000)
+    tf_minutes = 15
+    if tf == "M1": tf_minutes = 1
+    elif tf == "M5": tf_minutes = 5
+    elif tf == "H1": tf_minutes = 60
+    elif tf == "H4": tf_minutes = 240
+    
+    latest = latest_prices.get(pair)
+    base_price = latest["bid"] if latest else 1950.0
+    
+    data = []
+    current_price = base_price
+    for i in range(bars - 1, -1, -1):
+        t = now_ms - (bars - 1 - i) * tf_minutes * 60 * 1000
+        c = current_price
+        o = c - random.uniform(-3, 3)
+        h = max(o, c) + random.uniform(0, 1.5)
+        l = min(o, c) - random.uniform(0, 1.5)
+        v = random.randint(100, 5000)
+        data.append({
+            "time": t // 1000,
+            "open": round(o, 2),
+            "high": round(h, 2),
+            "low": round(l, 2),
+            "close": round(c, 2),
+            "volume": v
+        })
+        current_price = o
+        
+    data.reverse()
+    return data
+
+
 @app.get("/ohlcv")
 async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id: str = None):
     # Resolve target user_id for the bridge connection lookup
@@ -1375,6 +1430,10 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
             target_user_id = list(active_direct_loops.keys())[0]
         else:
             target_user_id = "00000000-0000-0000-0000-000000000000"
+
+    is_mock = direct_loop_mock.get(target_user_id, not MT5_AVAILABLE)
+    if is_mock:
+        return generate_local_mock_ohlcv(pair, tf, bars)
 
     # 1. Prioritize active bridge connection to fetch actual MT5 data
     if target_user_id in bridge_manager.active_connections:
@@ -1407,6 +1466,17 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
     if MT5_AVAILABLE:
         try:
             if mt5.initialize():
+                # Retrieve saved credentials and login to guarantee connection is active
+                acc = await fetch_user_broker_account(target_user_id)
+                if acc and acc.get("credentials_enc"):
+                    login = acc.get("login")
+                    server = acc.get("server")
+                    password = decrypt_password(acc.get("credentials_enc"))
+                    if password:
+                        login_res = mt5.login(login=int(login), password=password, server=server)
+                        if not login_res:
+                            print(f"[OHLCV] MT5 login failed for user {target_user_id} in /ohlcv: {mt5.last_error()}")
+
                 resolved = resolve_mt5_symbol(pair)
                 
                 mt5_tf = mt5.TIMEFRAME_M15
@@ -1439,38 +1509,8 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Error copying rates from MT5: {str(e)}")
 
-    # Mock fallback only if MT5 is unavailable on the platform (non-Windows)
-    now_ms = int(time.time() * 1000)
-    tf_minutes = 15
-    if tf == "M1": tf_minutes = 1
-    elif tf == "M5": tf_minutes = 5
-    elif tf == "H1": tf_minutes = 60
-    elif tf == "H4": tf_minutes = 240
-    
-    latest = latest_prices.get(pair)
-    base_price = latest["bid"] if latest else 1950.0
-    
-    data = []
-    current_price = base_price
-    for i in range(bars - 1, -1, -1):
-        t = now_ms - (bars - 1 - i) * tf_minutes * 60 * 1000
-        c = current_price
-        o = c - random.uniform(-3, 3)
-        h = max(o, c) + random.uniform(0, 1.5)
-        l = min(o, c) - random.uniform(0, 1.5)
-        v = random.randint(100, 5000)
-        data.append({
-            "time": t // 1000,
-            "open": round(o, 2),
-            "high": round(h, 2),
-            "low": round(l, 2),
-            "close": round(c, 2),
-            "volume": v
-        })
-        current_price = o
-        
-    data.reverse()
-    return data
+    # Fallback to mock data if not available or failed
+    return generate_local_mock_ohlcv(pair, tf, bars)
 
 @app.get("/price/{pair}")
 async def get_latest_price(pair: str):

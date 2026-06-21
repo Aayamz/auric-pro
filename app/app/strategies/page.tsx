@@ -268,16 +268,16 @@ export default function StrategiesPage() {
 
       {/* 3. Strategy Maker (Tabs section) */}
       <div className="bg-canvas border border-hairline rounded-md shadow-level-3 p-lg mt-md">
-        <div className="flex justify-between items-center border-b border-hairline pb-xs mb-md">
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-sm border-b border-hairline pb-xs mb-md">
           <h3 className="font-sans text-body-md font-semibold text-ink">Strategy Maker Console</h3>
           
           {/* Tab buttons */}
-          <div className="flex gap-xxs">
+          <div className="flex gap-xxs overflow-x-auto no-scrollbar max-w-full pb-xxs sm:pb-0">
             {['preset', 'upload', 'browse', 'ai_builder'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setSelectedTab(tab as 'preset' | 'upload' | 'browse' | 'ai_builder')}
-                className={`px-sm py-xxs font-sans text-xxs font-medium rounded-sm border transition-colors capitalize ${
+                className={`px-sm py-xxs font-sans text-xxs font-medium rounded-sm border transition-colors capitalize whitespace-nowrap ${
                   selectedTab === tab 
                     ? 'bg-primary border-primary text-on-primary' 
                     : 'bg-canvas border-hairline text-body-text hover:bg-canvas-soft'

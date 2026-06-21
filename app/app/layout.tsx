@@ -525,12 +525,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </main>
 
         {/* 3. Bottom Scrolling AI Commentary Ticker */}
-        <footer className="h-[36px] bg-primary text-on-primary border-t border-hairline flex items-center overflow-hidden shrink-0">
-          <div className="font-mono text-caption-mono text-on-primary px-lg bg-black border-r border-hairline shrink-0 h-full flex items-center uppercase tracking-wider font-semibold">
+        <footer className="h-[36px] bg-[#0f172a] dark:bg-black border-t border-hairline flex items-center overflow-hidden shrink-0">
+          <div className="font-mono text-caption-mono text-white px-lg bg-black border-r border-hairline shrink-0 h-full flex items-center uppercase tracking-wider font-semibold">
             AI Commentary
           </div>
           <div className="flex-1 relative overflow-hidden flex items-center">
-            <div className="animate-marquee whitespace-nowrap text-caption-mono font-mono pl-md text-on-primary/90">
+            <div className="animate-marquee whitespace-nowrap text-caption-mono font-mono pl-md text-zinc-300">
               {commentary.join(" | ")}
             </div>
           </div>

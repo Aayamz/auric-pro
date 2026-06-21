@@ -43,9 +43,9 @@ export default function PortfolioPage() {
   const [filterPair, setFilterPair] = useState('')
   const [filterStrategy, setFilterStrategy] = useState('')
 
-  const { positions } = useStore()
+  const { positions, bridgeStatus } = useStore()
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useQuery({
     queryKey: ['portfolio-stats'],
     queryFn: async () => {
       const res = await fetch('/api/portfolio/stats')
@@ -54,7 +54,7 @@ export default function PortfolioPage() {
     }
   })
 
-  const { data: equityCurve = [] } = useQuery({
+  const { data: equityCurve = [], refetch: refetchEquity } = useQuery({
     queryKey: ['equity-curve'],
     queryFn: async () => {
       const res = await fetch('/api/portfolio/equity-curve')
@@ -66,7 +66,7 @@ export default function PortfolioPage() {
     }
   })
 
-  const { data: tradeData = { trades: [], total: 0 } } = useQuery({
+  const { data: tradeData = { trades: [], total: 0 }, refetch: refetchTrades } = useQuery({
     queryKey: ['trades', filterPair, filterStrategy],
     queryFn: async () => {
       const q = new URLSearchParams()
@@ -76,6 +76,15 @@ export default function PortfolioPage() {
       return res.json()
     }
   })
+
+  // Trigger immediate query updates when bridge status transitions to connected
+  React.useEffect(() => {
+    if (bridgeStatus === 'connected') {
+      refetchStats()
+      refetchEquity()
+      refetchTrades()
+    }
+  }, [bridgeStatus, refetchStats, refetchEquity, refetchTrades])
 
   const dbTrades: Trade[] = tradeData.trades || []
 

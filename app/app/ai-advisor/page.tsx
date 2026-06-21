@@ -104,7 +104,7 @@ export default function AiAdvisorPage() {
     <div className="flex flex-col h-[calc(100vh-132px)]">
       <div className="flex flex-col h-full bg-canvas border border-hairline rounded-md shadow-level-3 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-md border-b border-hairline shrink-0">
+        <div className="flex flex-col sm:flex-row gap-sm justify-between items-start sm:items-center p-md border-b border-hairline shrink-0">
           <div className="flex items-center gap-sm">
             <div className="w-[32px] h-[32px] rounded-full bg-primary flex items-center justify-center shrink-0">
               <Brain className="w-sm h-sm text-on-primary" />
@@ -114,7 +114,7 @@ export default function AiAdvisorPage() {
               <span className="font-mono text-[9px] text-success uppercase">Online • Claude 3.5 Sonnet</span>
             </div>
           </div>
-          <div className="flex items-center gap-sm">
+          <div className="flex items-center gap-sm w-full sm:w-auto justify-between sm:justify-end">
             <label className="font-mono text-caption-mono text-mute mr-xxs">Context:</label>
             <select value={context} onChange={e => setContext(e.target.value)} className="form-input-sm focus:outline-none">
               <option value="live_market">Live Market</option>
