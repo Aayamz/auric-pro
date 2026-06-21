@@ -983,6 +983,12 @@ async def execute_direct_command(user_id: str, cmd: dict, is_mock: bool):
         await broadcast_to_client(user_id, event)
     
     try:
+        # Route commands to external bridge if connected (Option B / Remote Bridge mode)
+        if user_id in bridge_manager.active_connections:
+            print(f"[DirectEngine] Routing command to remote bridge for user {user_id}: {cmd_type}")
+            if await bridge_manager.send_command(user_id, cmd):
+                return
+
         if is_mock or not MT5_AVAILABLE:
             if cmd_type == "open_trade":
                 ticket = random.randint(100000, 999999)

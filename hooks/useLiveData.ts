@@ -23,98 +23,130 @@ function notifyTradeResult(result: TradeResult) {
 
 export function useLiveData() {
   const { setPrice, setPositions, addSignal, setBridgeStatus } = useStore()
-  const socketRef = useRef<Socket | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
     let active = true
+    let reconnectTimeoutId: ReturnType<typeof setTimeout>
+
     const initSocket = async () => {
-      const { data } = await supabase.auth.getSession()
-      const token = data.session?.access_token || 'ey.auric_test_jwt_token_fallback'
+      try {
+        const { data } = await supabase.auth.getSession()
+        const token = data.session?.access_token || 'ey.auric_test_jwt_token_fallback'
 
-      if (!active) return
+        if (!active) return
 
-      // Establishes Socket.io connection pointing to the origin host
-      const socket = io({
-        auth: { token },
-        transports: ['websocket', 'polling']
-      })
-      socketRef.current = socket
+        const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/client'
+        const socketUrl = `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
 
-      socket.on('connect', () => {
-        if (active) setBridgeStatus('connecting')
-      })
+        console.log(`[WebSocket] Connecting to: ${wsUrl}`)
+        const ws = new WebSocket(socketUrl)
+        wsRef.current = ws
 
-      socket.on('price', (data) => {
-        if (active && data?.pair) {
-          setPrice(data.pair, {
-            pair: data.pair,
-            bid: Number(data.bid),
-            ask: Number(data.ask),
-            spread: Number((data.ask - data.bid).toFixed(5)),
-            time: Number(data.time) || Date.now()
-          })
+        ws.onopen = () => {
+          if (active) {
+            console.log('[WebSocket] Connection established.')
+            setBridgeStatus('connecting')
+          }
         }
-      })
 
-      socket.on('positions', (data) => {
-        if (active && data?.data) {
-          setPositions(data.data)
+        ws.onmessage = (event) => {
+          if (!active) return
+          try {
+            const message = JSON.parse(event.data)
+            if (!message || !message.type) return
+
+            switch (message.type) {
+              case 'price':
+                if (message.pair) {
+                  setPrice(message.pair, {
+                    pair: message.pair,
+                    bid: Number(message.bid),
+                    ask: Number(message.ask),
+                    spread: Number((message.ask - message.bid).toFixed(5)),
+                    time: Number(message.time) || Date.now()
+                  })
+                }
+                break
+              case 'positions':
+                if (message.data) {
+                  setPositions(message.data)
+                }
+                break
+              case 'signal':
+                addSignal(message)
+                break
+              case 'trade_opened':
+                notifyTradeResult({ type: 'trade_opened', ...message })
+                break
+              case 'trade_error':
+                notifyTradeResult({ type: 'trade_error', ...message })
+                break
+              case 'trade_closed':
+                notifyTradeResult({ type: 'trade_closed', ...message })
+                break
+              case 'bridge_connected':
+                setBridgeStatus('connected')
+                break
+              case 'bridge_disconnected':
+                setBridgeStatus('disconnected')
+                break
+              default:
+                break
+            }
+          } catch (err: any) {
+            console.error('[WebSocket] Error parsing message:', err.message)
+          }
         }
-      })
 
-      socket.on('signal', (data) => {
-        if (active && data) {
-          addSignal(data)
+        ws.onclose = (event) => {
+          if (active) {
+            console.log(`[WebSocket] Connection closed (code: ${event.code}). Reconnecting in 3s...`)
+            setBridgeStatus('disconnected')
+            reconnectTimeoutId = setTimeout(initSocket, 3000)
+          }
         }
-      })
 
-      // Bridge feedback events for trade execution
-      socket.on('trade_opened', (data) => {
-        if (active) notifyTradeResult({ type: 'trade_opened', ...data })
-      })
-
-      socket.on('trade_error', (data) => {
-        if (active) notifyTradeResult({ type: 'trade_error', ...data })
-      })
-
-      socket.on('trade_closed', (data) => {
-        if (active) notifyTradeResult({ type: 'trade_closed', ...data })
-      })
-
-      // Bridge connection status events
-      socket.on('bridge_connected', () => {
-        if (active) setBridgeStatus('connected')
-      })
-
-      socket.on('bridge_disconnected', () => {
-        if (active) setBridgeStatus('disconnected')
-      })
+        ws.onerror = (err) => {
+          console.error('[WebSocket] Connection error:', err)
+          if (active) {
+            setBridgeStatus('disconnected')
+          }
+        }
+      } catch (err) {
+        console.error('[WebSocket] Failed to initialize socket:', err)
+        if (active) {
+          reconnectTimeoutId = setTimeout(initSocket, 3000)
+        }
+      }
     }
 
     initSocket()
 
     // Listen to token refresh to prevent token expiration issues
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'TOKEN_REFRESHED' && session && socketRef.current) {
-        socketRef.current.auth = { token: session.access_token }
-        // Re-authenticate socket connection
-        socketRef.current.disconnect().connect()
+      if (event === 'TOKEN_REFRESHED' && session && wsRef.current) {
+        console.log('[WebSocket] Token refreshed, reconnecting...')
+        if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+          wsRef.current.close()
+        }
       }
     })
 
     return () => {
       active = false
       subscription.unsubscribe()
-      if (socketRef.current) {
-        socketRef.current.disconnect()
-        socketRef.current = null
+      clearTimeout(reconnectTimeoutId)
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
       }
     }
   }, [setPrice, setPositions, addSignal, setBridgeStatus])
 
   const openTrade = useCallback((params: Record<string, unknown>, onResult?: TradeResultListener): Promise<TradeResult> => {
     return new Promise((resolve, reject) => {
-      if (!socketRef.current || !socketRef.current.connected) {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         reject(new Error('Bridge not connected. Please connect your MT5 account in Settings.'))
         return
       }
@@ -139,7 +171,7 @@ export function useLiveData() {
       }
 
       tradeResultListeners.add(listener)
-      socketRef.current.emit('open_trade', params)
+      wsRef.current.send(JSON.stringify({ type: 'open_trade', ...params }))
 
       // Auto-reject after 8 seconds if no response from bridge
       timeoutId = setTimeout(() => {
@@ -154,20 +186,20 @@ export function useLiveData() {
   }, [])
 
   const closeTrade = useCallback((ticket: number) => {
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('close_trade', { ticket })
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'close_trade', ticket }))
     }
   }, [])
 
   const modifyTrade = useCallback((params: { ticket: number; sl?: number; tp1?: number; tp2?: number; tp3?: number }) => {
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('modify_trade', params)
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'modify_trade', ...params }))
     }
   }, [])
 
   const haltTrading = useCallback(() => {
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('halt_trading')
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'halt_trading' }))
     }
   }, [])
 
