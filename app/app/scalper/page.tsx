@@ -7,6 +7,7 @@ import { ToastProvider, useToast } from '@/components/Toast'
 import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from 'lightweight-charts'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUp, ArrowDown, X, AlertTriangle, Loader2, WifiOff } from 'lucide-react'
+import { getBaseApiUrl } from '@/lib/api-helper'
 
 function ScalperContent() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
@@ -44,11 +45,19 @@ function ScalperContent() {
   const { data: ohlcvData } = useQuery({
     queryKey: ['ohlcv-m1'],
     queryFn: async () => {
-      const res = await fetch('/api/market/ohlcv?pair=XAUUSD&tf=M1&bars=200')
-      if (!res.ok) {
-        throw new Error('Failed to fetch live market data')
+      try {
+        const apiBase = getBaseApiUrl()
+        const res = await fetch(`${apiBase}/ohlcv?pair=XAUUSD&tf=M1&bars=200`)
+        if (!res.ok) throw new Error('Failed to fetch from local API')
+        return await res.json()
+      } catch (err) {
+        console.warn('[Scalper] Local API unreachable. Falling back to Vercel API proxy.', err)
+        const res = await fetch('/api/market/ohlcv?pair=XAUUSD&tf=M1&bars=200')
+        if (!res.ok) {
+          throw new Error('Failed to fetch live market data')
+        }
+        return await res.json()
       }
-      return res.json()
     },
     refetchInterval: 15000
   })
@@ -64,13 +73,15 @@ function ScalperContent() {
       candleSeriesRef.current = null
     }
 
+    const initialHeight = chartContainerRef.current.clientHeight || 400
+
     const chart = createChart(chartContainerRef.current, {
       layout: { background: { color: '#0a0a0a' }, textColor: '#888' },
       grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
       timeScale: { borderColor: '#222', timeVisible: true },
       rightPriceScale: { borderColor: '#222' },
-      width: chartContainerRef.current.clientWidth,
-      height: chartContainerRef.current.clientHeight || 400
+      width: chartContainerRef.current.clientWidth || 600,
+      height: initialHeight
     })
 
     const series = chart.addSeries(CandlestickSeries, {
@@ -82,15 +93,21 @@ function ScalperContent() {
     chartRef.current = chart
     candleSeriesRef.current = series
 
-    const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth })
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (!entries || entries.length === 0) return
+      const { width, height } = entries[0].contentRect
+      if (chartRef.current) {
+        chartRef.current.applyOptions({
+          width: width,
+          height: height || 400
+        })
       }
-    }
-    window.addEventListener('resize', handleResize)
+    })
+
+    resizeObserver.observe(chartContainerRef.current)
     
     return () => {
-      window.removeEventListener('resize', handleResize)
+      resizeObserver.disconnect()
       if (chartRef.current) {
         try {
           chartRef.current.remove()

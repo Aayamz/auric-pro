@@ -19,7 +19,9 @@ import {
   Settings, 
   LogOut,
   Zap,
-  Loader2
+  Loader2,
+  Menu,
+  X
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -37,6 +39,7 @@ const NAV_ITEMS = [
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
+  const [sidebarOpen, setSidebarOpen] = React.useState(false)
   
   // Activate live websocket listener at layout level
   useLiveData()
@@ -325,21 +328,41 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         onSkip={handleBrokerSkip}
       />
     )}
-    <div className="flex-1 flex min-h-screen bg-canvas-soft">
+    
+    {/* Sidebar mobile overlay backdrop */}
+    {sidebarOpen && (
+      <div 
+        onClick={() => setSidebarOpen(false)} 
+        className="fixed inset-0 bg-primary/20 backdrop-blur-xs z-40 md:hidden" 
+      />
+    )}
+
+    <div className="flex-1 flex min-h-screen bg-canvas-soft relative">
       
       {/* 1. Left Sidebar Navigation */}
-      <aside className="w-[240px] bg-canvas border-r border-hairline flex flex-col justify-between shrink-0">
+      <aside className={`w-[240px] bg-canvas border-r border-hairline flex flex-col justify-between shrink-0 fixed inset-y-0 left-0 z-50 transform transition-transform duration-300 md:relative md:translate-x-0 ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
         <div>
           {/* Logo Brand Header */}
-          <div className="h-[64px] border-b border-hairline flex items-center px-lg">
-            <span className="font-sans text-display-sm font-semibold tracking-tight text-ink">
-              AURIC PRO
-            </span>
-            <span className="ml-xxs font-mono text-[9px] text-mute border border-hairline px-xxs py-[2px] rounded-md">
-              V2.0
-            </span>
+          <div className="h-[64px] border-b border-hairline flex items-center justify-between px-lg">
+            <div className="flex items-center">
+              <span className="font-sans text-display-sm font-semibold tracking-tight text-ink">
+                AURIC PRO
+              </span>
+              <span className="ml-xxs font-mono text-[9px] text-mute border border-hairline px-xxs py-[2px] rounded-md">
+                V2.0
+              </span>
+            </div>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="p-xs text-body-text hover:text-ink md:hidden"
+              title="Close menu"
+            >
+              <X className="w-sm h-sm" />
+            </button>
           </div>
-
+ 
           {/* Navigation Links */}
           <nav className="p-sm space-y-[2px]">
             {navList.map((item) => {
@@ -349,6 +372,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <Link
                   key={item.href}
                   href={item.href}
+                  onClick={() => setSidebarOpen(false)}
                   className={`flex items-center gap-sm px-md py-xs rounded-sm transition-colors text-body-sm relative ${
                     isActive
                       ? 'bg-canvas-soft-2 text-ink font-medium'
@@ -366,7 +390,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             })}
           </nav>
         </div>
-
+ 
         {/* Sidebar Footer */}
         <div className="p-sm border-t border-hairline space-y-xs">
           <div className="px-md py-xs">
@@ -384,55 +408,66 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-
+ 
       {/* 2. Main Content & Top Header Panel */}
       <div className="flex-1 flex flex-col min-w-0">
         
         {/* Upper Dashboard Header */}
-        <header className="h-[64px] bg-canvas border-b border-hairline flex items-center justify-between px-xl shrink-0">
+        <header className="h-[64px] bg-canvas border-b border-hairline flex items-center justify-between px-md md:px-xl shrink-0">
           
-          {/* Real-time Status Pills */}
-          <div className="flex items-center gap-sm">
-            {/* Bridge Connection Status — click to connect when offline */}
+          {/* Left section: Hamburger Toggle + Real-time Status Pills */}
+          <div className="flex items-center gap-sm min-w-0">
             <button
-              onClick={() => bridgeStatus !== 'connected' && setShowBrokerModal(true)}
-              className={`flex items-center gap-xs px-sm py-[4px] border rounded-pill bg-canvas-soft shadow-level-2 transition-colors ${
-                bridgeStatus !== 'connected'
-                  ? 'border-error/40 hover:bg-error-soft cursor-pointer'
-                  : 'border-hairline cursor-default'
-              }`}
-              title={bridgeStatus !== 'connected' ? 'Click to connect MT5 broker account' : 'MT5 bridge connected'}
+              onClick={() => setSidebarOpen(true)}
+              className="p-xs -ml-xs mr-xxs md:hidden text-body-text hover:text-ink shrink-0"
+              title="Open menu"
             >
-              <span className={`w-xs h-xs rounded-full inline-block ${
-                bridgeStatus === 'connected' ? 'bg-success animate-pulse' : 'bg-error animate-pulse'
-              }`} />
-              <span className={`font-mono text-[10px] uppercase font-semibold ${
-                bridgeStatus === 'connected' ? 'text-body-text' : 'text-error'
-              }`}>
-                {bridgeStatus === 'connected' ? 'BRIDGE: LIVE' : 'CONNECT MT5 ↗'}
-              </span>
+              <Menu className="w-sm h-sm" />
             </button>
 
-            {/* Trading Loop Auto-execution status */}
-            <div className="flex items-center gap-xs px-sm py-[4px] border border-hairline rounded-pill bg-canvas-soft shadow-level-2">
-              <span className={`w-xs h-xs rounded-full inline-block ${
-                botRunning ? 'bg-success animate-pulse' : 'bg-mute'
-              }`} />
-              <span className="font-mono text-[10px] text-body-text uppercase font-semibold">
-                ALGO: {botRunning ? 'ACTIVE' : 'IDLE'}
-              </span>
-            </div>
-
-            {/* Current Active Trading Strategy */}
-            <div className="flex items-center gap-xs px-sm py-[4px] border border-hairline rounded-pill bg-canvas-soft shadow-level-2">
-              <span className="font-mono text-[10px] text-body-text uppercase font-semibold">
-                STRAT: {activeStrategy.toUpperCase()}
-              </span>
+            {/* Real-time Status Pills (horizontal scroll on narrow screens) */}
+            <div className="flex items-center gap-xs overflow-x-auto no-scrollbar py-xxs">
+              {/* Bridge Connection Status — click to connect when offline */}
+              <button
+                onClick={() => bridgeStatus !== 'connected' && setShowBrokerModal(true)}
+                className={`flex items-center gap-xs px-xs sm:px-sm py-[4px] border rounded-pill bg-canvas-soft shadow-level-2 transition-colors shrink-0 ${
+                  bridgeStatus !== 'connected'
+                    ? 'border-error/40 hover:bg-error-soft cursor-pointer'
+                    : 'border-hairline cursor-default'
+                }`}
+                title={bridgeStatus !== 'connected' ? 'Click to connect MT5 broker account' : 'MT5 bridge connected'}
+              >
+                <span className={`w-xs h-xs rounded-full inline-block ${
+                  bridgeStatus === 'connected' ? 'bg-success animate-pulse' : 'bg-error animate-pulse'
+                }`} />
+                <span className={`font-mono text-[10px] uppercase font-semibold ${
+                  bridgeStatus === 'connected' ? 'text-body-text' : 'text-error'
+                }`}>
+                  {bridgeStatus === 'connected' ? 'BRIDGE: LIVE' : 'CONNECT MT5 ↗'}
+                </span>
+              </button>
+ 
+              {/* Trading Loop Auto-execution status */}
+              <div className="flex items-center gap-xs px-xs sm:px-sm py-[4px] border border-hairline rounded-pill bg-canvas-soft shadow-level-2 shrink-0">
+                <span className={`w-xs h-xs rounded-full inline-block ${
+                  botRunning ? 'bg-success animate-pulse' : 'bg-mute'
+                }`} />
+                <span className="font-mono text-[10px] text-body-text uppercase font-semibold">
+                  ALGO: {botRunning ? 'ACTIVE' : 'IDLE'}
+                </span>
+              </div>
+ 
+              {/* Current Active Trading Strategy (hidden on mobile, shown on tablet/desktop) */}
+              <div className="flex items-center gap-xs px-xs sm:px-sm py-[4px] border border-hairline rounded-pill bg-canvas-soft shadow-level-2 shrink-0 hidden sm:flex">
+                <span className="font-mono text-[10px] text-body-text uppercase font-semibold">
+                  STRAT: {activeStrategy.toUpperCase()}
+                </span>
+              </div>
             </div>
           </div>
-
+ 
           {/* Quick Actions */}
-          <div className="flex items-center gap-sm">
+          <div className="flex items-center gap-sm shrink-0">
             <button
               onClick={async () => {
                 const action = botRunning ? 'stop' : 'start'
@@ -451,9 +486,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </header>
-
-        {/* Inner Content Area */}
-        <main className="flex-1 overflow-y-auto p-xl relative">
+ 
+        {/* Inner Content Area (added responsive padding classes) */}
+        <main className="flex-1 overflow-y-auto p-md md:p-xl relative">
           {children}
         </main>
 

@@ -7,6 +7,7 @@ import { useLiveData } from '@/hooks/useLiveData'
 import { createChart, IChartApi, ISeriesApi, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts'
 import { Edit2 } from 'lucide-react'
 import { useToast } from '@/components/Toast'
+import { getBaseApiUrl } from '@/lib/api-helper'
 
 export default function DashboardPage() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
@@ -38,15 +39,23 @@ export default function DashboardPage() {
   const [modifySL, setModifySL] = useState('')
   const [modifyTP, setModifyTP] = useState('')
 
-  // Fetch OHLCV data using React Query
+  // Fetch OHLCV data using React Query (attempts local direct query first, falls back to Vercel proxy)
   const { data: ohlcvData, refetch: refetchOhlcv } = useQuery({
     queryKey: ['ohlcv', selectedPair, selectedTimeframe],
     queryFn: async () => {
-      const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200`)
-      if (!res.ok) {
-        throw new Error('Failed to fetch live market data')
+      try {
+        const apiBase = getBaseApiUrl()
+        const res = await fetch(`${apiBase}/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200`)
+        if (!res.ok) throw new Error('Failed to fetch from local API')
+        return await res.json()
+      } catch (err) {
+        console.warn('[Dashboard] Local API unreachable. Falling back to Vercel API proxy.', err)
+        const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200`)
+        if (!res.ok) {
+          throw new Error('Failed to fetch live market data')
+        }
+        return await res.json()
       }
-      return res.json()
     },
     refetchInterval: 10000 // Poll every 10s as a fallback
   })
@@ -59,7 +68,7 @@ export default function DashboardPage() {
       .catch(() => {})
   }, [setSignals])
 
-  // Initialize and update the TradingView Lightweight Chart
+    // Initialize and update the TradingView Lightweight Chart
   useEffect(() => {
     if (!chartContainerRef.current) return
 
@@ -72,6 +81,8 @@ export default function DashboardPage() {
       candleSeriesRef.current = null
       markersRef.current = null
     }
+
+    const initialHeight = chartContainerRef.current.clientHeight || 400
 
     // Create Chart Instance
     const chart = createChart(chartContainerRef.current, {
@@ -93,7 +104,7 @@ export default function DashboardPage() {
         borderColor: '#ebebeb'
       },
       width: chartContainerRef.current.clientWidth || 600,
-      height: 400
+      height: initialHeight
     })
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
@@ -109,18 +120,22 @@ export default function DashboardPage() {
     candleSeriesRef.current = candlestickSeries
     markersRef.current = createSeriesMarkers(candlestickSeries, [])
 
-    // Handle Resize
-    const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
+    // Handle Resize using ResizeObserver
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (!entries || entries.length === 0) return
+      const { width, height } = entries[0].contentRect
+      if (chartRef.current) {
         chartRef.current.applyOptions({
-          width: chartContainerRef.current.clientWidth
+          width: width,
+          height: height || 400
         })
       }
-    }
-    window.addEventListener('resize', handleResize)
+    })
+
+    resizeObserver.observe(chartContainerRef.current)
 
     return () => {
-      window.removeEventListener('resize', handleResize)
+      resizeObserver.disconnect()
       if (chartRef.current) {
         try {
           chartRef.current.remove()
@@ -286,16 +301,16 @@ export default function DashboardPage() {
   return (
     <div className="space-y-lg flex flex-col h-full">
       
-      {/* Dynamic Controls Header */}
-      <div className="flex justify-between items-center bg-canvas border border-hairline p-md rounded-md">
-        <div className="flex items-center gap-md">
+      {/* Dynamic Controls Header (fully responsive layout on mobile) */}
+      <div className="flex flex-col gap-md lg:flex-row lg:justify-between lg:items-center bg-canvas border border-hairline p-md rounded-md">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-md">
           {/* Pair Select */}
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="block font-mono text-[10px] text-mute uppercase mb-xxs">Trading Pair</label>
             <select
               value={selectedPair}
               onChange={(e) => setSelectedPair(e.target.value)}
-              className="form-input bg-canvas font-mono font-medium focus:outline-none"
+              className="form-input bg-canvas font-mono font-medium focus:outline-none w-full sm:w-[160px]"
             >
               <option value="XAUUSD">XAUUSD (Gold)</option>
               <option value="EURUSD">EURUSD</option>
@@ -306,7 +321,7 @@ export default function DashboardPage() {
           {/* Timeframes Select */}
           <div>
             <label className="block font-mono text-[10px] text-mute uppercase mb-xxs">Timeframe</label>
-            <div className="flex gap-[2px] bg-canvas-soft-2 p-[2px] rounded-sm border border-hairline">
+            <div className="flex gap-[2px] bg-canvas-soft-2 p-[2px] rounded-sm border border-hairline w-fit">
               {['M1', 'M5', 'M15', 'H1', 'H4'].map((tf) => (
                 <button
                   key={tf}
@@ -324,8 +339,8 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Chart Overlays toggles */}
-        <div className="flex items-center gap-xs">
+        {/* Chart Overlays toggles (wraps nicely on smaller screens) */}
+        <div className="flex flex-wrap items-center gap-xs">
           <button
             onClick={() => setChartOverlay('ob', !chartOverlays.ob)}
             className={`px-sm py-xxs font-sans text-xxs font-medium border rounded-pill transition-colors ${
@@ -368,8 +383,8 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg flex-1 min-h-0">
         
         {/* Panel 1: Main Chart Terminal */}
-        <div className="lg:col-span-2 bg-canvas border border-hairline rounded-md flex flex-col p-md shadow-level-2">
-          <div className="flex justify-between items-center mb-sm border-b border-hairline pb-xs">
+        <div className="lg:col-span-2 bg-canvas border border-hairline rounded-md flex flex-col p-md shadow-level-2 lg:h-full">
+          <div className="flex justify-between items-center mb-sm border-b border-hairline pb-xs shrink-0">
             <h4 className="font-sans text-body-md font-semibold text-ink">
               Chart Console — {selectedPair} ({selectedTimeframe})
             </h4>
@@ -377,7 +392,7 @@ export default function DashboardPage() {
               Real-time update: {prices[selectedPair]?.bid ? 'Connected' : 'Syncing'}
             </span>
           </div>
-          <div ref={chartContainerRef} className="flex-1 w-full bg-canvas relative overflow-hidden" style={{ minHeight: '350px' }} />
+          <div ref={chartContainerRef} className="w-full bg-canvas relative overflow-hidden h-[350px] lg:h-full lg:flex-1" />
         </div>
 
         {/* Panel 2 & 3 Right Container */}
