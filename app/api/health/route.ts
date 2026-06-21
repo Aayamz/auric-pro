@@ -81,7 +81,14 @@ export async function GET() {
   }
 
   // Determine overall status
-  status.ok = status.supabase.connected && status.redis.connected && status.pythonApi.connected && status.razorpay.configured
+  // In a Vercel serverless environment, we only require Supabase to be connected to load the dashboard.
+  // This prevents blocking the UI when the local PC backend or local cache is unreachable from the cloud.
+  const isVercel = process.env.VERCEL === '1'
+  if (isVercel) {
+    status.ok = status.supabase.connected
+  } else {
+    status.ok = status.supabase.connected && status.redis.connected && status.pythonApi.connected && status.razorpay.configured
+  }
 
   return NextResponse.json(status, { status: status.ok ? 200 : 503 })
 }
