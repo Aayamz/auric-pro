@@ -407,7 +407,7 @@ export default function StrategiesPage() {
 
       {/* Config Modal Frame */}
       {configModalOpen && editingStrat && (
-        <div className="fixed inset-0 bg-primary/40 flex justify-center items-center z-50 overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex justify-center items-center z-50 overflow-y-auto">
           <div className="bg-canvas border border-hairline p-xl rounded-md shadow-level-5 max-w-[550px] w-full mx-md my-xl relative">
             <h3 className="font-sans text-body-md font-semibold text-ink border-b border-hairline pb-xs mb-sm">
               Tweak Parameters — {editingStrat.display_name || editingStrat.name}

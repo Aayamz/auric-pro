@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { getCurrentUserId } from '@/lib/supabase-server'
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
@@ -9,8 +10,11 @@ export async function GET(request: Request) {
   const barsStr = searchParams.get('bars') || '200'
   const bars = parseInt(barsStr, 10) || 200
 
+  const sessionUserId = await getCurrentUserId()
+  const user_id = searchParams.get('user_id') || sessionUserId || ''
+
   try {
-    const res = await fetch(`${PYTHON_API_URL}/ohlcv?pair=${pair}&tf=${tf}&bars=${bars}`, {
+    const res = await fetch(`${PYTHON_API_URL}/ohlcv?pair=${pair}&tf=${tf}&bars=${bars}&user_id=${user_id}`, {
       next: { revalidate: 10 } // Cache for 10s
     })
     

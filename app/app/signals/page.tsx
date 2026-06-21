@@ -297,9 +297,15 @@ export default function SignalsPage() {
       </div>
 
       {/* Drawer Overlay for Signal Details */}
+      {drawerOpen && (
+        <div 
+          onClick={() => setDrawerOpen(false)} 
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-30" 
+        />
+      )}
       {drawerOpen && selectedSignal && (
-        <div className="absolute right-0 top-0 bottom-0 w-[360px] bg-canvas border-l border-hairline shadow-level-5 p-xl flex flex-col justify-between z-40 transition-transform duration-300">
-          <div className="space-y-lg">
+        <div className="fixed right-0 top-0 bottom-0 w-full sm:w-[360px] bg-canvas border-l border-hairline shadow-level-5 p-xl flex flex-col justify-between z-40 transition-transform duration-300">
+          <div className="space-y-lg text-ink">
             {/* Header */}
             <div className="flex justify-between items-center border-b border-hairline pb-xs">
               <h3 className="font-sans text-body-md font-semibold text-ink">Signal Blueprint</h3>

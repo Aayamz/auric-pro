@@ -125,6 +125,7 @@ interface AuricStore {
   selectedPair: string
   selectedTimeframe: string
   chartOverlays: { ob: boolean; fvg: boolean; bos: boolean; tp: boolean; sl: boolean }
+  theme: 'light' | 'dark'
 
   // Actions
   setPrice: (pair: string, data: PriceData) => void
@@ -142,6 +143,7 @@ interface AuricStore {
   setSelectedPair: (pair: string) => void
   setSelectedTimeframe: (tf: string) => void
   setChartOverlay: (key: 'ob' | 'fvg' | 'bos' | 'tp' | 'sl', value: boolean) => void
+  setTheme: (theme: 'light' | 'dark') => void
 }
 
 export const useStore = create<AuricStore>((set) => ({
@@ -173,6 +175,7 @@ export const useStore = create<AuricStore>((set) => ({
   selectedPair: 'XAUUSD',
   selectedTimeframe: 'M15',
   chartOverlays: { ob: true, fvg: true, bos: true, tp: true, sl: true },
+  theme: 'light',
 
   // Actions
   setPrice: (pair, data) => set((state) => ({
@@ -197,5 +200,6 @@ export const useStore = create<AuricStore>((set) => ({
   setSelectedTimeframe: (selectedTimeframe) => set({ selectedTimeframe }),
   setChartOverlay: (key, value) => set((state) => ({
     chartOverlays: { ...state.chartOverlays, [key]: value }
-  }))
+  })),
+  setTheme: (theme) => set({ theme })
 }))

@@ -21,7 +21,9 @@ import {
   Zap,
   Loader2,
   Menu,
-  X
+  X,
+  Sun,
+  Moon
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -40,6 +42,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
+
+  const toggleTheme = () => {
+    const nextTheme = theme === 'light' ? 'dark' : 'light'
+    setTheme(nextTheme)
+    localStorage.setItem('theme', nextTheme)
+    if (nextTheme === 'dark') {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
+  }
   
   // Activate live websocket listener at layout level
   useLiveData()
@@ -81,8 +94,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     setUser,
     setBotRunning,
     setBridgeStatus,
-    setSubscription
+    setSubscription,
+    theme,
+    setTheme
   } = useStore()
+
+  useEffect(() => {
+    const savedTheme = (localStorage.getItem('theme') || 'light') as 'light' | 'dark'
+    setTheme(savedTheme)
+    if (savedTheme === 'dark') {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
+  }, [setTheme])
 
   const email = storeUser?.email || ''
   const isAdmin = email === 'demo@auricpro.com' || 
@@ -333,7 +358,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     {sidebarOpen && (
       <div 
         onClick={() => setSidebarOpen(false)} 
-        className="fixed inset-0 bg-primary/20 backdrop-blur-xs z-40 md:hidden" 
+        className="fixed inset-0 bg-black/50 backdrop-blur-xs z-40 md:hidden" 
       />
     )}
 
@@ -468,6 +493,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
  
           {/* Quick Actions */}
           <div className="flex items-center gap-sm shrink-0">
+            <button
+              onClick={toggleTheme}
+              className="p-[6px] text-body-text hover:text-ink rounded-sm border border-hairline bg-canvas hover:bg-canvas-soft-2 transition-colors shrink-0 cursor-pointer"
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {theme === 'dark' ? <Sun className="w-sm h-sm" /> : <Moon className="w-sm h-sm" />}
+            </button>
             <button
               onClick={async () => {
                 const action = botRunning ? 'stop' : 'start'

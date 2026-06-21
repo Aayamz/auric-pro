@@ -30,7 +30,9 @@ export default function DashboardPage() {
     selectedTimeframe, 
     setSelectedTimeframe,
     chartOverlays,
-    setChartOverlay
+    setChartOverlay,
+    theme,
+    user
   } = useStore()
 
   // Modal / Drawer States for Modify Position
@@ -41,16 +43,16 @@ export default function DashboardPage() {
 
   // Fetch OHLCV data using React Query (attempts local direct query first, falls back to Vercel proxy)
   const { data: ohlcvData, refetch: refetchOhlcv } = useQuery({
-    queryKey: ['ohlcv', selectedPair, selectedTimeframe],
+    queryKey: ['ohlcv', selectedPair, selectedTimeframe, user?.id],
     queryFn: async () => {
       try {
         const apiBase = getBaseApiUrl()
-        const res = await fetch(`${apiBase}/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200`)
+        const res = await fetch(`${apiBase}/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200&user_id=${user?.id || ''}`)
         if (!res.ok) throw new Error('Failed to fetch from local API')
         return await res.json()
       } catch (err) {
         console.warn('[Dashboard] Local API unreachable. Falling back to Vercel API proxy.', err)
-        const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200`)
+        const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200&user_id=${user?.id || ''}`)
         if (!res.ok) {
           throw new Error('Failed to fetch live market data')
         }
@@ -84,24 +86,30 @@ export default function DashboardPage() {
 
     const initialHeight = chartContainerRef.current.clientHeight || 400
 
+    const isDark = theme === 'dark'
+    const chartBg = isDark ? '#000000' : '#ffffff'
+    const chartText = isDark ? '#a0a0a0' : '#888888'
+    const gridColor = isDark ? '#111111' : '#f5f5f5'
+    const borderColor = isDark ? '#222222' : '#ebebeb'
+
     // Create Chart Instance
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { color: '#ffffff' },
-        textColor: '#888888',
+        background: { color: chartBg },
+        textColor: chartText,
         fontFamily: 'var(--font-sans)'
       },
       grid: {
-        vertLines: { color: '#f5f5f5' },
-        horzLines: { color: '#f5f5f5' }
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor }
       },
       timeScale: {
-        borderColor: '#ebebeb',
+        borderColor: borderColor,
         timeVisible: true,
         secondsVisible: false
       },
       rightPriceScale: {
-        borderColor: '#ebebeb'
+        borderColor: borderColor
       },
       width: chartContainerRef.current.clientWidth || 600,
       height: initialHeight
@@ -145,7 +153,7 @@ export default function DashboardPage() {
         markersRef.current = null
       }
     }
-  }, [selectedPair])
+  }, [selectedPair, theme])
 
   // Feed Data and Draw Overlays on Chart
   useEffect(() => {
@@ -499,7 +507,7 @@ export default function DashboardPage() {
 
       {/* Modify Position SL/TP Modal Drawer */}
       {modifyModalOpen && (
-        <div className="fixed inset-0 bg-primary/40 flex justify-center items-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
           <div className="bg-canvas border border-hairline p-xl rounded-md shadow-level-5 max-w-[400px] w-full mx-md">
             <h3 className="font-sans text-body-md font-semibold text-ink mb-xxs">
               Modify SL/TP Limits

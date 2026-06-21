@@ -118,6 +118,7 @@ direct_loop_mock = {}         # user_id -> bool
 latest_prices = {}
 active_accounts = {}
 bot_running_fallback = {}     # user_id -> bool (when Redis is offline)
+pending_ohlcv_requests = {}    # request_id -> asyncio.Future
 
 def resolve_mt5_symbol(pair: str) -> str:
     if not MT5_AVAILABLE:
@@ -268,6 +269,7 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
         reconstructed_count += 1
 
     print(f"[SyncHistory] Reconstructed and upserted {reconstructed_count} trades from MT5 deals.")
+    await broadcast_to_client(user_id, {"type": "trades_updated"})
 
 async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: str, mock: bool):
     print(f"[DirectEngine] Starting direct MT5 engine loop for user {user_id} (Mock={mock})...")
@@ -779,16 +781,42 @@ async def bridge_endpoint(websocket: WebSocket):
             
             # Cache latest account statistics locally in memory
             if data.get("type") == "positions":
+                # Check for closed positions to trigger history sync
+                prev_info = active_accounts.get(user_id, {})
+                prev_tickets = prev_info.get("tickets", set())
+                curr_tickets = {p.get("ticket") for p in data.get("data", []) if p.get("ticket")}
+                
                 active_accounts[user_id] = {
                     "balance": data.get("balance", 10000.00),
                     "equity": data.get("equity", 10000.00),
-                    "last_seen": datetime.now().isoformat()
+                    "last_seen": datetime.now().isoformat(),
+                    "tickets": curr_tickets
                 }
+                
+                # If some tickets were closed, sync history so the portfolio updates instantly
+                if prev_tickets and not curr_tickets.issubset(prev_tickets):
+                    closed_tickets = prev_tickets - curr_tickets
+                    if closed_tickets:
+                        print(f"[Bridge] Detected closed tickets {closed_tickets} for user {user_id}. Triggering sync...")
+                        acc = await fetch_user_broker_account(user_id)
+                        if acc and acc.get("credentials_enc"):
+                            login = acc.get("login")
+                            server = acc.get("server")
+                            password = decrypt_password(acc.get("credentials_enc"))
+                            if password:
+                                is_mock = direct_loop_mock.get(user_id, not MT5_AVAILABLE)
+                                asyncio.create_task(sync_mt5_history(user_id, login, password, server, mock=is_mock))
             elif data.get("type") == "price" and data.get("pair"):
                 latest_prices[data["pair"]] = {
                     "bid": data.get("bid"),
                     "ask": data.get("ask")
                 }
+            elif data.get("type") == "ohlcv_data":
+                req_id = data.get("request_id")
+                if req_id in pending_ohlcv_requests:
+                    fut = pending_ohlcv_requests[req_id]
+                    if not fut.done():
+                        fut.set_result(data.get("data", []))
 
             # Route to Redis pub/sub if running (Skip price ticks to save Upstash command quota)
             if redis_client:
@@ -1116,6 +1144,8 @@ async def execute_direct_command(user_id: str, cmd: dict, is_mock: bool):
                 success = await asyncio.to_thread(execute_real_close, ticket, login, password, server)
                 if success:
                     await publish_result({"type": "trade_closed", "ticket": ticket})
+                    # Sync history in background so portfolio updates instantly
+                    asyncio.create_task(sync_mt5_history(user_id, login, password, server, mock=False))
                 else:
                     await publish_result({
                         "type": "trade_error",
@@ -1335,7 +1365,45 @@ async def get_bridge_status(user_id: str):
 
 
 @app.get("/ohlcv")
-async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200):
+async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id: str = None):
+    # Resolve target user_id for the bridge connection lookup
+    target_user_id = user_id
+    if not target_user_id:
+        if bridge_manager.active_connections:
+            target_user_id = list(bridge_manager.active_connections.keys())[0]
+        elif active_direct_loops:
+            target_user_id = list(active_direct_loops.keys())[0]
+        else:
+            target_user_id = "00000000-0000-0000-0000-000000000000"
+
+    # 1. Prioritize active bridge connection to fetch actual MT5 data
+    if target_user_id in bridge_manager.active_connections:
+        req_id = str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        pending_ohlcv_requests[req_id] = fut
+        
+        cmd = {
+            "type": "fetch_ohlcv",
+            "pair": pair,
+            "tf": tf,
+            "bars": bars,
+            "request_id": req_id
+        }
+        
+        try:
+            if await bridge_manager.send_command(target_user_id, cmd):
+                data = await asyncio.wait_for(fut, timeout=5.0)
+                if data:
+                    return data
+        except asyncio.TimeoutError:
+            print(f"[OHLCV] Timeout waiting for bridge response for user {target_user_id}")
+        except Exception as e:
+            print(f"[OHLCV] Error requesting from bridge: {e}")
+        finally:
+            pending_ohlcv_requests.pop(req_id, None)
+
+    # 2. Otherwise fall back to local MT5 functions if running locally on Windows
     if MT5_AVAILABLE:
         try:
             if mt5.initialize():

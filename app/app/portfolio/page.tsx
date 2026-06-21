@@ -4,6 +4,7 @@ import React, { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { Download, FileText, TrendingUp, Target, BarChart2 } from 'lucide-react'
+import { useStore } from '@/store'
 
 interface Trade {
   id: string
@@ -42,6 +43,8 @@ export default function PortfolioPage() {
   const [filterPair, setFilterPair] = useState('')
   const [filterStrategy, setFilterStrategy] = useState('')
 
+  const { positions } = useStore()
+
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['portfolio-stats'],
     queryFn: async () => {
@@ -74,7 +77,46 @@ export default function PortfolioPage() {
     }
   })
 
-  const trades: Trade[] = tradeData.trades || []
+  const dbTrades: Trade[] = tradeData.trades || []
+
+  const trades = useMemo(() => {
+    if (activeTab === 'Open') {
+      return positions.map((pos) => ({
+        id: `pos-${pos.ticket}`,
+        pair: pos.symbol,
+        direction: pos.type,
+        lots: pos.volume,
+        open_price: pos.open_price,
+        close_price: pos.current_price,
+        pnl_usd: pos.profit,
+        pnl_r: Number((pos.profit / 10).toFixed(2)),
+        strategy: 'MT5 Direct',
+        session: 'N/A',
+        status: 'OPEN',
+        opened_at: new Date().toISOString(),
+        closed_at: ''
+      }))
+    }
+
+    const now = new Date()
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    const startOfWeek = startOfToday - 7 * 24 * 60 * 60 * 1000
+    const startOfMonth = startOfToday - 30 * 24 * 60 * 60 * 1000
+
+    return dbTrades.filter((t) => {
+      const openedTime = new Date(t.opened_at).getTime()
+      if (activeTab === 'Today') {
+        return openedTime >= startOfToday
+      }
+      if (activeTab === 'This Week') {
+        return openedTime >= startOfWeek
+      }
+      if (activeTab === 'This Month') {
+        return openedTime >= startOfMonth
+      }
+      return true // 'All Time'
+    })
+  }, [activeTab, dbTrades, positions])
 
   // Calendar heatmap mock data (last 30 days)
   const calendarData = useMemo(() => Array.from({ length: 30 }, (_, i) => {
@@ -103,7 +145,7 @@ export default function PortfolioPage() {
       </div>
 
       {/* Stats Row */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-md">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-sm md:gap-md">
         <StatCard label="Total P&L" value={statsLoading ? '…' : `$${(stats?.total_pnl ?? 0).toFixed(2)}`}
           icon={TrendingUp} color={(stats?.total_pnl ?? 0) >= 0 ? 'text-success' : 'text-error'} />
         <StatCard label="Win Rate" value={statsLoading ? '…' : `${(stats?.win_rate ?? 0).toFixed(1)}%`} icon={Target} />
@@ -131,7 +173,7 @@ export default function PortfolioPage() {
       {/* Calendar Heatmap */}
       <div className="bg-canvas border border-hairline rounded-md p-md shadow-level-2">
         <h4 className="font-sans text-body-md font-semibold text-ink mb-sm">Daily P&L Calendar</h4>
-        <div className="grid grid-cols-10 gap-xxs">
+        <div className="grid grid-cols-5 sm:grid-cols-10 gap-xxs">
           {calendarData.map((d, i) => (
             <div key={i} title={`${d.date}: $${d.pnl.toFixed(2)}`}
               className={`h-[28px] rounded-xs border border-hairline/50 flex items-center justify-center cursor-default transition-transform hover:scale-110 ${
@@ -152,18 +194,18 @@ export default function PortfolioPage() {
       {/* Trade Table Section */}
       <div className="bg-canvas border border-hairline rounded-md shadow-level-3">
         {/* Tab bar + Filters */}
-        <div className="flex flex-wrap items-center justify-between border-b border-hairline p-md gap-md">
-          <div className="flex gap-xxs">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-hairline p-md gap-md">
+          <div className="flex gap-xxs overflow-x-auto no-scrollbar max-w-full pb-xxs sm:pb-0">
             {TABS.map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-sm py-xxs font-sans text-caption rounded-pill border transition-colors ${
+                className={`px-sm py-xxs font-sans text-caption rounded-pill border transition-colors whitespace-nowrap ${
                   activeTab === tab ? 'bg-primary border-primary text-on-primary' : 'bg-canvas border-hairline text-body-text hover:bg-canvas-soft'
                 }`}>
                 {tab}
               </button>
             ))}
           </div>
-          <div className="flex gap-sm items-center">
+          <div className="flex flex-wrap gap-xs items-center max-w-full">
             <select value={filterPair} onChange={e => setFilterPair(e.target.value)} className="form-input-sm bg-canvas focus:outline-none">
               <option value="">All Pairs</option>
               <option value="XAUUSD">XAUUSD</option>
@@ -175,11 +217,11 @@ export default function PortfolioPage() {
               <option value="trend_following">Trend Following</option>
             </select>
             <button onClick={handleExportCSV}
-              className="flex items-center gap-xxs px-sm h-[32px] border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft text-body-text font-sans text-caption transition-colors">
+              className="flex items-center gap-xxs px-sm h-[32px] border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft text-body-text font-sans text-caption transition-colors whitespace-nowrap">
               <Download className="w-xxs h-xxs" /> CSV
             </button>
             <a href="/api/portfolio/export/pdf"
-              className="flex items-center gap-xxs px-sm h-[32px] border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft text-body-text font-sans text-caption transition-colors">
+              className="flex items-center gap-xxs px-sm h-[32px] border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft text-body-text font-sans text-caption transition-colors whitespace-nowrap">
               <FileText className="w-xxs h-xxs" /> PDF
             </a>
           </div>

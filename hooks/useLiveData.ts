@@ -2,6 +2,7 @@ import { useEffect, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { useStore } from '@/store'
 import { supabase } from '@/lib/supabase'
+import { useQueryClient } from '@tanstack/react-query'
 
 export interface TradeResult {
   type: 'trade_opened' | 'trade_error' | 'trade_closed'
@@ -24,6 +25,7 @@ function notifyTradeResult(result: TradeResult) {
 export function useLiveData() {
   const { setPrice, setPositions, addSignal, setBridgeStatus } = useStore()
   const wsRef = useRef<WebSocket | null>(null)
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     let active = true
@@ -77,13 +79,24 @@ export function useLiveData() {
                 addSignal(message)
                 break
               case 'trade_opened':
+                queryClient.invalidateQueries({ queryKey: ['portfolio-stats'] })
+                queryClient.invalidateQueries({ queryKey: ['equity-curve'] })
+                queryClient.invalidateQueries({ queryKey: ['trades'] })
                 notifyTradeResult({ type: 'trade_opened', ...message })
                 break
               case 'trade_error':
                 notifyTradeResult({ type: 'trade_error', ...message })
                 break
               case 'trade_closed':
+                queryClient.invalidateQueries({ queryKey: ['portfolio-stats'] })
+                queryClient.invalidateQueries({ queryKey: ['equity-curve'] })
+                queryClient.invalidateQueries({ queryKey: ['trades'] })
                 notifyTradeResult({ type: 'trade_closed', ...message })
+                break
+              case 'trades_updated':
+                queryClient.invalidateQueries({ queryKey: ['portfolio-stats'] })
+                queryClient.invalidateQueries({ queryKey: ['equity-curve'] })
+                queryClient.invalidateQueries({ queryKey: ['trades'] })
                 break
               case 'bridge_connected':
                 setBridgeStatus('connected')

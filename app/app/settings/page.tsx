@@ -549,7 +549,7 @@ function SettingsContent() {
 
           {tab === 'billing' && (
             <SectionCard title="Billing & Subscription">
-              <div className="grid grid-cols-3 gap-md">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
                 {(['free', 'pro', 'elite'] as const).map(p => (
                   <div key={p} className={`border rounded-md p-md cursor-pointer transition-all ${plan === p ? 'border-primary shadow-level-3' : 'border-hairline hover:border-primary/40'}`}
                     onClick={() => setPlan(p)}>

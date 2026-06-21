@@ -129,6 +129,73 @@ def resolve_mt5_symbol(symbol):
                 return s.name
     return symbol
 
+def fetch_real_ohlcv(pair, tf, bars):
+    if not MT5_AVAILABLE:
+        return []
+    try:
+        if mt5.initialize():
+            resolved = resolve_mt5_symbol(pair)
+            
+            mt5_tf = mt5.TIMEFRAME_M15
+            if tf == "M1": mt5_tf = mt5.TIMEFRAME_M1
+            elif tf == "M5": mt5_tf = mt5.TIMEFRAME_M5
+            elif tf == "M15": mt5_tf = mt5.TIMEFRAME_M15
+            elif tf == "H1": mt5_tf = mt5.TIMEFRAME_H1
+            elif tf == "H4": mt5_tf = mt5.TIMEFRAME_H4
+            elif tf == "D1": mt5_tf = mt5.TIMEFRAME_D1
+            
+            rates = mt5.copy_rates_from_pos(resolved, mt5_tf, 0, bars)
+            if rates is not None and len(rates) > 0:
+                data = []
+                for r in rates:
+                    data.append({
+                        "time": int(r[0]), # seconds
+                        "open": float(r[1]),
+                        "high": float(r[2]),
+                        "low": float(r[3]),
+                        "close": float(r[4]),
+                        "volume": int(r[5])
+                    })
+                return data
+    except Exception as e:
+        print(f"Error copying rates in bridge: {e}")
+    return []
+
+def generate_mock_ohlcv(pair, tf, bars):
+    import time
+    now_ms = int(time.time() * 1000)
+    tf_minutes = 15
+    if tf == "M1": tf_minutes = 1
+    elif tf == "M5": tf_minutes = 5
+    elif tf == "H1": tf_minutes = 60
+    elif tf == "H4": tf_minutes = 240
+    
+    base_price = 1950.0
+    if "EURUSD" in pair: base_price = 1.0850
+    elif "GBPUSD" in pair: base_price = 1.2650
+    elif "USDJPY" in pair: base_price = 151.50
+    
+    data = []
+    current_price = base_price
+    for i in range(bars - 1, -1, -1):
+        t = now_ms - (bars - 1 - i) * tf_minutes * 60 * 1000
+        c = current_price
+        o = c - random.uniform(-3, 3)
+        h = max(o, c) + random.uniform(0, 1.5)
+        l = min(o, c) - random.uniform(0, 1.5)
+        v = random.randint(100, 5000)
+        data.append({
+            "time": t // 1000,
+            "open": round(o, 2),
+            "high": round(h, 2),
+            "low": round(l, 2),
+            "close": round(c, 2),
+            "volume": v
+        })
+        current_price = o
+    data.reverse()
+    return data
+
 # Mock State for non-Windows or Mock verification
 mock_positions = []
 mock_bid = 1950.0
@@ -417,6 +484,23 @@ async def command_listener(ws, is_mock):
                                 "type": "trade_error",
                                 "message": f"MT5 modify failed: retcode={retcode}"
                             }))
+            elif cmd_type == "fetch_ohlcv":
+                req_id = cmd.get("request_id")
+                pair = cmd.get("pair", "XAUUSD")
+                tf = cmd.get("tf", "M15")
+                bars = int(cmd.get("bars", 200))
+                
+                ohlcv_data = []
+                if is_mock:
+                    ohlcv_data = generate_mock_ohlcv(pair, tf, bars)
+                else:
+                    ohlcv_data = fetch_real_ohlcv(pair, tf, bars)
+                
+                await ws.send(json.dumps({
+                    "type": "ohlcv_data",
+                    "request_id": req_id,
+                    "data": ohlcv_data
+                }))
         except Exception as e:
             print(f"Error handling message: {e}")
 
