@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useStore } from '@/store'
 import { createSupabaseClient } from '@/lib/supabase'
@@ -38,6 +38,13 @@ export default function AdminPage() {
   const [totalUsers, setTotalUsers] = useState(0)
   const [activeBridges, setActiveBridges] = useState(0)
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 10
+
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage
+    return users.slice(start, start + itemsPerPage)
+  }, [users, currentPage])
 
   const fetchAdminData = async () => {
     try {
@@ -194,7 +201,7 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-hairline">
-              {users.map(u => {
+              {paginatedUsers.map(u => {
                 const busyStart = actionInProgress === `${u.userId}-start`
                 const busyStop = actionInProgress === `${u.userId}-stop`
                 const busySync = actionInProgress === `${u.userId}-sync`
@@ -273,6 +280,31 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        {users.length > itemsPerPage && (
+          <div className="flex items-center justify-between p-md border-t border-hairline bg-canvas-soft font-sans text-caption text-body-text">
+            <span>
+              Showing <b>{Math.min(users.length, (currentPage - 1) * itemsPerPage + 1)}</b> to <b>{Math.min(users.length, currentPage * itemsPerPage)}</b> of <b>{users.length}</b> entries
+            </span>
+            <div className="flex gap-xs">
+              <button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                className="px-sm py-xxs border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft disabled:opacity-40 transition-opacity cursor-pointer"
+              >
+                Previous
+              </button>
+              <button
+                disabled={currentPage >= Math.ceil(users.length / itemsPerPage)}
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(users.length / itemsPerPage)))}
+                className="px-sm py-xxs border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft disabled:opacity-40 transition-opacity cursor-pointer"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

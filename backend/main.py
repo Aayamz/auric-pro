@@ -1393,8 +1393,24 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
     elif tf == "H1": tf_minutes = 60
     elif tf == "H4": tf_minutes = 240
     
-    latest = latest_prices.get(pair)
-    base_price = latest["bid"] if latest else 1950.0
+    base_price = 1950.0
+    if MT5_AVAILABLE:
+        try:
+            if mt5.initialize():
+                resolved = resolve_mt5_symbol(pair)
+                tick = mt5.symbol_info_tick(resolved)
+                if tick:
+                    base_price = tick.bid
+                else:
+                    rates = mt5.copy_rates_from_pos(resolved, mt5.TIMEFRAME_M15, 0, 1)
+                    if rates is not None and len(rates) > 0:
+                        base_price = float(rates[0][4])
+        except Exception:
+            pass
+            
+    if base_price == 1950.0:
+        latest = latest_prices.get(pair)
+        base_price = latest["bid"] if latest else 1950.0
     
     data = []
     current_price = base_price

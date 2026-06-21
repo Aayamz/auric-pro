@@ -171,9 +171,24 @@ def generate_mock_ohlcv(pair, tf, bars):
     elif tf == "H4": tf_minutes = 240
     
     base_price = 1950.0
-    if "EURUSD" in pair: base_price = 1.0850
-    elif "GBPUSD" in pair: base_price = 1.2650
-    elif "USDJPY" in pair: base_price = 151.50
+    if MT5_AVAILABLE:
+        try:
+            if mt5.initialize():
+                resolved = resolve_mt5_symbol(pair)
+                tick = mt5.symbol_info_tick(resolved)
+                if tick:
+                    base_price = tick.bid
+                else:
+                    rates = mt5.copy_rates_from_pos(resolved, mt5.TIMEFRAME_M15, 0, 1)
+                    if rates is not None and len(rates) > 0:
+                        base_price = float(rates[0][4])
+        except Exception:
+            pass
+            
+    if base_price == 1950.0:
+        if "EURUSD" in pair: base_price = 1.0850
+        elif "GBPUSD" in pair: base_price = 1.2650
+        elif "USDJPY" in pair: base_price = 151.50
     
     data = []
     current_price = base_price
@@ -203,6 +218,17 @@ mock_ask = 1950.5
 
 async def mock_price_stream(ws):
     global mock_bid, mock_ask
+    if MT5_AVAILABLE:
+        try:
+            if mt5.initialize():
+                resolved = resolve_mt5_symbol("XAUUSD")
+                tick = mt5.symbol_info_tick(resolved)
+                if tick:
+                    mock_bid = tick.bid
+                    mock_ask = tick.ask
+        except Exception:
+            pass
+            
     while True:
         # Simulate small price changes for XAUUSD
         change = random.uniform(-0.5, 0.5)
@@ -529,70 +555,72 @@ async def run_bridge(ws_url, token, is_mock, creds=None):
                 **connect_kwargs
             ) as ws:
                 print("Connected! Sending hello packet...")
+                
+                # Check MT5 connection and active session to configure mock mode dynamically
+                terminal_initialized = False
+                terminal_logged_in = False
+                acc_info = None
+                
+                if MT5_AVAILABLE and not is_mock:
+                    if mt5.initialize(timeout=10000):
+                        terminal_initialized = True
+                        acc_info = mt5.account_info()
+                        terminal_logged_in = acc_info and acc_info.login > 0
+                    
+                # Dynamically try to log in if creds are provided/loaded
+                login_success = False
+                if terminal_initialized:
+                    if not creds:
+                        try:
+                            creds = load_credentials()
+                        except Exception:
+                            creds = None
+                    
+                    if creds:
+                        desired_login = int(creds["login"])
+                        desired_server = creds["server"]
+                        if terminal_logged_in and acc_info.login == desired_login and acc_info.server == desired_server:
+                            print(f"MT5 terminal already logged in to correct account: {desired_login}")
+                            login_success = True
+                        else:
+                            print(f"Attempting to login to MT5 account {desired_login} on {desired_server}...")
+                            if mt5.login(login=desired_login, password=creds["password"], server=desired_server, timeout=10000):
+                                print("MT5 login successful.")
+                                login_success = True
+                                acc_info = mt5.account_info()
+                                terminal_logged_in = True
+                            else:
+                                print(f"MT5 login failed: {mt5.last_error()}")
+                
+                # If login failed but terminal is already logged in, fallback to using active session
+                if not login_success and terminal_logged_in:
+                    print(f"MT5 Login failed or no creds, but using active terminal session (login={acc_info.login}, server={acc_info.server})")
+                    login_success = True
+                
+                active_mock = is_mock or not login_success
+                if not active_mock:
+                    print(f"Running bridge in LIVE MT5 mode — login={acc_info.login}, server={acc_info.server}")
+                else:
+                    print("Running bridge in MOCK mode...")
+                    if terminal_initialized:
+                        mt5.shutdown()
+                
                 await ws.send(json.dumps({
                     "type": "bridge_hello",
                     "version": "1.0",
-                    "is_mock": is_mock
+                    "is_mock": active_mock
                 }))
                 
                 # Reset reconnect delay on successful connection
                 delay = 1
                 
-                if is_mock:
-                    print("Running bridge in MOCK mode...")
+                if active_mock:
                     await asyncio.gather(
                         mock_price_stream(ws),
                         mock_position_stream(ws),
                         command_listener(ws, is_mock=True)
                     )
                 else:
-                    print("Running bridge in LIVE MT5 mode...")
-                    if not creds:
-                        creds = load_credentials()
-                    
-                    # Step 1: Initialize MT5 terminal connection
-                    if not mt5.initialize(timeout=10000):
-                        print(f"MT5 initialize() failed: {mt5.last_error()}. Falling back to MOCK mode.")
-                        mt5.shutdown()
-                        is_mock = True
-                        await ws.send(json.dumps({
-                            "type": "bridge_hello",
-                            "version": "1.0",
-                            "is_mock": True
-                        }))
-                        await asyncio.gather(
-                            mock_price_stream(ws),
-                            mock_position_stream(ws),
-                            command_listener(ws, is_mock=True)
-                        )
-                        return
-                    
-                    # Step 2: Authenticate with credentials
-                    if not mt5.login(
-                        login=creds["login"],
-                        password=creds["password"],
-                        server=creds["server"],
-                        timeout=10000
-                    ):
-                        print(f"MT5 login() failed: {mt5.last_error()}. Falling back to MOCK mode.")
-                        mt5.shutdown()
-                        is_mock = True
-                        await ws.send(json.dumps({
-                            "type": "bridge_hello",
-                            "version": "1.0",
-                            "is_mock": True
-                        }))
-                        await asyncio.gather(
-                            mock_price_stream(ws),
-                            mock_position_stream(ws),
-                            command_listener(ws, is_mock=True)
-                        )
-                        return
-
-                    acc_info = mt5.account_info()
-                    if acc_info:
-                        print(f"MT5 connected — login={acc_info.login}, server={acc_info.server}, balance={acc_info.balance}, equity={acc_info.equity}")
-
                     await asyncio.gather(
                         real_price_stream(ws),
                         real_position_stream(ws),

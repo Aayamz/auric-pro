@@ -42,6 +42,8 @@ export default function PortfolioPage() {
   const [activeTab, setActiveTab] = useState('All Time')
   const [filterPair, setFilterPair] = useState('')
   const [filterStrategy, setFilterStrategy] = useState('')
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 10
 
   const { positions, bridgeStatus } = useStore()
 
@@ -86,7 +88,20 @@ export default function PortfolioPage() {
     }
   }, [bridgeStatus, refetchStats, refetchEquity, refetchTrades])
 
+  // Reset page index on tab or filter shifts
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [activeTab, filterPair, filterStrategy])
+
   const dbTrades: Trade[] = tradeData.trades || []
+
+  const uniquePairs = useMemo(() => {
+    const pairs = new Set<string>(['XAUUSD'])
+    dbTrades.forEach((t) => {
+      if (t.pair) pairs.add(t.pair)
+    })
+    return Array.from(pairs)
+  }, [dbTrades])
 
   const trades = useMemo(() => {
     if (activeTab === 'Open') {
@@ -126,6 +141,11 @@ export default function PortfolioPage() {
       return true // 'All Time'
     })
   }, [activeTab, dbTrades, positions])
+
+  const paginatedTrades = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage
+    return trades.slice(start, start + itemsPerPage)
+  }, [trades, currentPage])
 
   // Calendar heatmap mock data (last 30 days)
   const calendarData = useMemo(() => Array.from({ length: 30 }, (_, i) => {
@@ -217,7 +237,9 @@ export default function PortfolioPage() {
           <div className="flex flex-wrap gap-xs items-center max-w-full">
             <select value={filterPair} onChange={e => setFilterPair(e.target.value)} className="form-input-sm bg-canvas focus:outline-none">
               <option value="">All Pairs</option>
-              <option value="XAUUSD">XAUUSD</option>
+              {uniquePairs.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
             </select>
             <select value={filterStrategy} onChange={e => setFilterStrategy(e.target.value)} className="form-input-sm bg-canvas focus:outline-none">
               <option value="">All Strategies</option>
@@ -247,7 +269,7 @@ export default function PortfolioPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-hairline">
-              {trades.map(t => {
+              {paginatedTrades.map(t => {
                 const isWin = (t.pnl_usd ?? 0) >= 0
                 return (
                   <tr key={t.id} className="hover:bg-canvas-soft text-body-sm text-body-text transition-colors">
@@ -282,6 +304,31 @@ export default function PortfolioPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        {trades.length > itemsPerPage && (
+          <div className="flex items-center justify-between p-md border-t border-hairline bg-canvas-soft font-sans text-caption text-body-text">
+            <span>
+              Showing <b>{Math.min(trades.length, (currentPage - 1) * itemsPerPage + 1)}</b> to <b>{Math.min(trades.length, currentPage * itemsPerPage)}</b> of <b>{trades.length}</b> entries
+            </span>
+            <div className="flex gap-xs">
+              <button
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                className="px-sm py-xxs border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft disabled:opacity-40 transition-opacity"
+              >
+                Previous
+              </button>
+              <button
+                disabled={currentPage >= Math.ceil(trades.length / itemsPerPage)}
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(trades.length / itemsPerPage)))}
+                className="px-sm py-xxs border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft disabled:opacity-40 transition-opacity"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

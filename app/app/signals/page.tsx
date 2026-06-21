@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { ChevronRight, X, Radio, RefreshCw } from 'lucide-react'
@@ -29,6 +29,12 @@ export default function SignalsPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [aiExplanation, setAiExplanation] = useState('')
   const [loadingAi, setLoadingAi] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 10
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [filterPair, filterStrategy, filterStatus])
 
   // Live signals from WebSocket (Zustand store)
   const storeSignals = useStore(s => s.signals) as SignalItem[]
@@ -64,6 +70,11 @@ export default function SignalsPage() {
     const dbOnly = dbSignals.filter(s => !liveIds.has(s.id))
     return [...filteredStore, ...dbOnly]
   }, [storeSignals, dbSignals, filterPair, filterStrategy, filterStatus])
+
+  const paginatedSignals = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage
+    return signalsList.slice(start, start + itemsPerPage)
+  }, [signalsList, currentPage])
 
   // Open Drawer and trigger AI Explanation lazily
   const handleRowClick = async (signal: SignalItem) => {
@@ -193,8 +204,8 @@ export default function SignalsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-hairline">
-              {signalsList.length > 0 ? (
-                signalsList.map((sig) => {
+              {paginatedSignals.length > 0 ? (
+                paginatedSignals.map((sig) => {
                   const isLive = sig.status === 'LIVE'
                   const isFromStore = storeSignals.some(s => s.id === sig.id)
                   return (
@@ -260,6 +271,31 @@ export default function SignalsPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        {signalsList.length > itemsPerPage && (
+          <div className="flex items-center justify-between p-md border-t border-hairline bg-canvas-soft font-sans text-caption text-body-text">
+            <span>
+              Showing <b>{Math.min(signalsList.length, (currentPage - 1) * itemsPerPage + 1)}</b> to <b>{Math.min(signalsList.length, currentPage * itemsPerPage)}</b> of <b>{signalsList.length}</b> entries
+            </span>
+            <div className="flex gap-xs">
+              <button
+                disabled={currentPage === 1}
+                onClick={(e) => { e.stopPropagation(); setCurrentPage(prev => Math.max(prev - 1, 1)); }}
+                className="px-sm py-xxs border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft disabled:opacity-40 transition-opacity cursor-pointer"
+              >
+                Previous
+              </button>
+              <button
+                disabled={currentPage >= Math.ceil(signalsList.length / itemsPerPage)}
+                onClick={(e) => { e.stopPropagation(); setCurrentPage(prev => Math.min(prev + 1, Math.ceil(signalsList.length / itemsPerPage))); }}
+                className="px-sm py-xxs border border-hairline rounded-sm bg-canvas hover:bg-canvas-soft disabled:opacity-40 transition-opacity cursor-pointer"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Analytics Cards */}
