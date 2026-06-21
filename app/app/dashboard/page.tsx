@@ -25,6 +25,7 @@ export default function DashboardPage() {
     positions, 
     signals, 
     setSignals,
+    bridgeStatus,
     selectedPair, 
     setSelectedPair, 
     selectedTimeframe, 
@@ -59,7 +60,8 @@ export default function DashboardPage() {
         return await res.json()
       }
     },
-    refetchInterval: 10000 // Poll every 10s as a fallback
+    refetchInterval: 15000, // Poll every 15s as a fallback
+    staleTime: 5000 // Allow React Query to treat data as stale after 5s so bridge-live invalidation works immediately
   })
 
   // Fetch initial active signals
@@ -155,7 +157,7 @@ export default function DashboardPage() {
     }
   }, [selectedPair, theme])
 
-  // Feed Data and Draw Overlays on Chart
+  // Feed Data and Draw Overlays on Chart — uses real MT5 position SL/TP when available
   useEffect(() => {
     if (!candleSeriesRef.current || !Array.isArray(ohlcvData) || ohlcvData.length === 0) return
 
@@ -164,66 +166,70 @@ export default function DashboardPage() {
 
     const latestPrice = ohlcvData[ohlcvData.length - 1].close
 
-    // 1. Draw Active TP Line
+    // Find the first active position matching the selected pair for real SL/TP
+    const activePos = positions.find(p =>
+      p.symbol?.replace('-', '').toUpperCase() === selectedPair.replace('-', '').toUpperCase()
+    )
+
+    // 1. Draw TP Line — from real position or estimated offset
     if (tpLineRef.current) {
-      try {
-        candleSeriesRef.current.removePriceLine(tpLineRef.current)
-      } catch (e) {}
+      try { candleSeriesRef.current.removePriceLine(tpLineRef.current) } catch (e) {}
       tpLineRef.current = null
     }
     if (chartOverlays.tp) {
+      // Use real TP from MT5 position if available
+      const tpPrice = activePos && (activePos as any).tp && (activePos as any).tp > 0
+        ? (activePos as any).tp
+        : latestPrice + 12.0
       tpLineRef.current = candleSeriesRef.current.createPriceLine({
-        price: latestPrice + 12.0,
+        price: tpPrice,
         color: '#0070f3',
         lineWidth: 1,
-        lineStyle: 2, // Dashed
+        lineStyle: 2,
         axisLabelVisible: true,
-        title: 'Active TP1 (Take Profit)'
+        title: activePos ? 'TP (Take Profit)' : 'Est. TP Level'
       })
     }
 
-    // 2. Draw Active SL Line
+    // 2. Draw SL Line — from real position or estimated offset
     if (slLineRef.current) {
-      try {
-        candleSeriesRef.current.removePriceLine(slLineRef.current)
-      } catch (e) {}
+      try { candleSeriesRef.current.removePriceLine(slLineRef.current) } catch (e) {}
       slLineRef.current = null
     }
     if (chartOverlays.sl) {
+      // Use real SL from MT5 position if available
+      const slPrice = activePos && (activePos as any).sl && (activePos as any).sl > 0
+        ? (activePos as any).sl
+        : latestPrice - 8.0
       slLineRef.current = candleSeriesRef.current.createPriceLine({
-        price: latestPrice - 8.0,
+        price: slPrice,
         color: '#ee0000',
         lineWidth: 1,
-        lineStyle: 2, // Dashed
+        lineStyle: 2,
         axisLabelVisible: true,
-        title: 'Active SL (Stop Loss)'
+        title: activePos ? 'SL (Stop Loss)' : 'Est. SL Level'
       })
     }
 
-    // 2.5. Draw AI Entry Line
+    // 3. Draw AI Entry Line — use open_price of active position if available
     if (aiEntryLineRef.current) {
-      try {
-        candleSeriesRef.current.removePriceLine(aiEntryLineRef.current)
-      } catch (e) {}
+      try { candleSeriesRef.current.removePriceLine(aiEntryLineRef.current) } catch (e) {}
       aiEntryLineRef.current = null
     }
-    const aiMarkerIndex = Math.min(195, ohlcvData.length - 2)
-    const aiPrice = ohlcvData[aiMarkerIndex]?.close
-    if (aiPrice) {
+    if (activePos) {
       aiEntryLineRef.current = candleSeriesRef.current.createPriceLine({
-        price: aiPrice,
+        price: activePos.open_price,
         color: '#7928ca',
         lineWidth: 1,
-        lineStyle: 0, // Solid
+        lineStyle: 0,
         axisLabelVisible: true,
-        title: 'AI Entry Level'
+        title: `Entry (${activePos.type})`
       })
     }
 
-    // 3. Mark indicators/markers
+    // 4. BOS markers on historical candles
     const markers: Record<string, unknown>[] = []
-    if (chartOverlays.bos) {
-      // Draw Breakout arrow indicator on historical candles
+    if (chartOverlays.bos && ohlcvData.length > 10) {
       const markerIndex = Math.min(180, ohlcvData.length - 5)
       markers.push({
         time: ohlcvData[markerIndex].time,
@@ -234,20 +240,24 @@ export default function DashboardPage() {
       })
     }
 
-    // AI Entry marker symbol (◆)
-    markers.push({
-      time: ohlcvData[aiMarkerIndex].time,
-      position: 'belowBar',
-      color: '#7928ca',
-      shape: 'diamond',
-      text: 'AI Entry'
-    })
+    // Mark active position entry on chart
+    if (activePos) {
+      // Find the candle closest to position open — use last known candle as fallback
+      const entryCandle = ohlcvData[ohlcvData.length - 1]
+      markers.push({
+        time: entryCandle.time,
+        position: activePos.type === 'BUY' ? 'belowBar' : 'aboveBar',
+        color: activePos.type === 'BUY' ? '#0070f3' : '#ee0000',
+        shape: activePos.type === 'BUY' ? 'arrowUp' : 'arrowDown',
+        text: `${activePos.type} @${activePos.open_price}`
+      })
+    }
 
     if (markersRef.current) {
       markersRef.current.setMarkers(markers)
     }
 
-  }, [ohlcvData, chartOverlays])
+  }, [ohlcvData, chartOverlays, positions, selectedPair])
 
   // Force refetch on pair/tf change
   useEffect(() => {
@@ -406,7 +416,13 @@ export default function DashboardPage() {
               Chart Console — {selectedPair} ({selectedTimeframe})
             </h4>
             <span className="font-mono text-caption-mono text-mute">
-              Real-time update: {prices[selectedPair]?.bid ? 'Connected' : 'Syncing'}
+              {bridgeStatus === 'connected'
+                ? (prices[selectedPair]?.bid
+                    ? `Live: ${selectedPair} ${prices[selectedPair].bid.toFixed(2)}`
+                    : 'MT5 Connected — Awaiting tick')
+                : bridgeStatus === 'connecting'
+                ? 'Connecting to MT5...'
+                : 'Bridge Offline — showing last data'}
             </span>
           </div>
           <div ref={chartContainerRef} className="w-full bg-canvas relative overflow-hidden h-[350px] lg:h-full lg:flex-1" />

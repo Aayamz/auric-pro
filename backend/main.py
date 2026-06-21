@@ -404,7 +404,9 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                                 "volume": p_dict.get("volume"),
                                 "open_price": p_dict.get("price_open"),
                                 "current_price": p_dict.get("price_current"),
-                                "profit": p_dict.get("profit")
+                                "profit": p_dict.get("profit"),
+                                "sl": p_dict.get("sl"),
+                                "tp": p_dict.get("tp")
                             })
                     acc_info = mt5.account_info()
                     balance = acc_info.balance if acc_info else 10000.0
@@ -770,14 +772,16 @@ async def bridge_endpoint(websocket: WebSocket):
 
     await bridge_manager.connect(user_id, websocket)
     
-    # Broadcast bridge_status: true immediately
+    # Broadcast bridge_status: connected immediately so clients know to refresh
     await broadcast_to_client(user_id, {
         "type": "bridge_status",
         "connected": True
     })
     
-    # Sync history instantly upon bridge connection
+    # Fetch broker account for this user
     acc = await fetch_user_broker_account(user_id)
+    
+    # Sync MT5 trade history immediately on bridge connection
     if acc and acc.get("credentials_enc"):
         login = acc.get("login")
         server = acc.get("server")
@@ -785,6 +789,14 @@ async def bridge_endpoint(websocket: WebSocket):
         if password:
             is_mock = direct_loop_mock.get(user_id, not MT5_AVAILABLE)
             asyncio.create_task(sync_mt5_history(user_id, login, password, server, mock=is_mock))
+    
+    # Broadcast bridge_live event — signals the frontend to hard-refresh
+    # OHLCV, portfolio stats, trades, and equity curve from real MT5 data
+    await broadcast_to_client(user_id, {
+        "type": "bridge_status",
+        "connected": True,
+        "live_refresh": True  # flag for client to invalidate all cached data
+    })
 
     # Start background Redis task to listen for commands and send to the bridge
     listener_task = asyncio.create_task(redis_command_listener(user_id, websocket))
@@ -1393,8 +1405,13 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
     elif tf == "H1": tf_minutes = 60
     elif tf == "H4": tf_minutes = 240
     
-    base_price = 1950.0
-    if MT5_AVAILABLE:
+    # Use live price from store if available, otherwise try MT5, otherwise fall back
+    base_price = 0.0
+    latest = latest_prices.get(pair)
+    if latest:
+        base_price = latest.get("bid", 0.0)
+    
+    if base_price == 0.0 and MT5_AVAILABLE:
         try:
             if mt5.initialize():
                 resolved = resolve_mt5_symbol(pair)
@@ -1407,10 +1424,10 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
                         base_price = float(rates[0][4])
         except Exception:
             pass
-            
-    if base_price == 1950.0:
-        latest = latest_prices.get(pair)
-        base_price = latest["bid"] if latest else 1950.0
+    
+    # Ultimate fallback if we truly have no price data
+    if base_price == 0.0:
+        base_price = 3300.0  # More realistic XAUUSD price than old 1950.0 hardcode
     
     data = []
     current_price = base_price

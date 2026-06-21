@@ -1,5 +1,4 @@
 import { useEffect, useCallback, useRef } from 'react'
-import { io, Socket } from 'socket.io-client'
 import { useStore } from '@/store'
 import { supabase } from '@/lib/supabase'
 import { useQueryClient } from '@tanstack/react-query'
@@ -23,13 +22,30 @@ function notifyTradeResult(result: TradeResult) {
 }
 
 export function useLiveData() {
-  const { setPrice, setPositions, addSignal, setBridgeStatus } = useStore()
+  const { setPrice, setPositions, addSignal, setBridgeStatus, setBalance, setEquity } = useStore()
   const wsRef = useRef<WebSocket | null>(null)
   const queryClient = useQueryClient()
+  // Track previous bridge status to detect transitions
+  const prevBridgeStatusRef = useRef<string>('disconnected')
 
   useEffect(() => {
     let active = true
     let reconnectTimeoutId: ReturnType<typeof setTimeout>
+
+    /**
+     * Called whenever the bridge transitions to 'connected'.
+     * Forces a full refetch of all stale data so real MT5 data
+     * immediately replaces any cached/mock data in the UI.
+     */
+    const onBridgeLive = () => {
+      console.log('[WebSocket] Bridge is now LIVE — forcing full data refresh from MT5...')
+      // Invalidate all cached data so React Query re-fetches with live MT5 data
+      queryClient.invalidateQueries({ queryKey: ['ohlcv'] })
+      queryClient.invalidateQueries({ queryKey: ['portfolio-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['equity-curve'] })
+      queryClient.invalidateQueries({ queryKey: ['trades'] })
+      queryClient.invalidateQueries({ queryKey: ['signals'] })
+    }
 
     const initSocket = async () => {
       try {
@@ -70,11 +86,15 @@ export function useLiveData() {
                   })
                 }
                 break
-              case 'positions':
+              case 'positions': {
                 if (message.data) {
                   setPositions(message.data)
                 }
+                // Sync real account balance & equity from live MT5 positions update
+                if (typeof message.balance === 'number') setBalance(message.balance)
+                if (typeof message.equity === 'number') setEquity(message.equity)
                 break
+              }
               case 'signal':
                 addSignal(message)
                 break
@@ -99,14 +119,23 @@ export function useLiveData() {
                 queryClient.invalidateQueries({ queryKey: ['trades'] })
                 break
               case 'bridge_connected':
+                if (prevBridgeStatusRef.current !== 'connected') onBridgeLive()
+                prevBridgeStatusRef.current = 'connected'
                 setBridgeStatus('connected')
                 break
               case 'bridge_disconnected':
+                prevBridgeStatusRef.current = 'disconnected'
                 setBridgeStatus('disconnected')
                 break
-              case 'bridge_status':
-                setBridgeStatus(message.connected ? 'connected' : 'disconnected')
+              case 'bridge_status': {
+                const newStatus = message.connected ? 'connected' : 'disconnected'
+                if (message.connected && prevBridgeStatusRef.current !== 'connected') {
+                  onBridgeLive()
+                }
+                prevBridgeStatusRef.current = newStatus
+                setBridgeStatus(newStatus)
                 break
+              }
               default:
                 break
             }
@@ -118,6 +147,7 @@ export function useLiveData() {
         ws.onclose = (event) => {
           if (active) {
             console.log(`[WebSocket] Connection closed (code: ${event.code}). Reconnecting in 3s...`)
+            prevBridgeStatusRef.current = 'disconnected'
             setBridgeStatus('disconnected')
             reconnectTimeoutId = setTimeout(initSocket, 3000)
           }
@@ -158,7 +188,7 @@ export function useLiveData() {
         wsRef.current = null
       }
     }
-  }, [setPrice, setPositions, addSignal, setBridgeStatus])
+  }, [setPrice, setPositions, addSignal, setBridgeStatus, setBalance, setEquity, queryClient])
 
   const openTrade = useCallback((params: Record<string, unknown>, onResult?: TradeResultListener): Promise<TradeResult> => {
     return new Promise((resolve, reject) => {

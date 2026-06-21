@@ -113,6 +113,9 @@ interface AuricStore {
   bridgeStatus: 'connected' | 'disconnected' | 'connecting'
   botRunning: boolean
   activeStrategy: string
+  // Live MT5 account financials
+  balance: number
+  equity: number
 
   // User data (written by React Query on fetch)
   user: User | null
@@ -140,6 +143,8 @@ interface AuricStore {
   setRiskProfile: (profile: RiskProfile | null) => void
   setTrades: (trades: Trade[]) => void
   setBacktestResult: (result: BacktestResult | null) => void
+  setBalance: (balance: number) => void
+  setEquity: (equity: number) => void
   setSelectedPair: (pair: string) => void
   setSelectedTimeframe: (tf: string) => void
   setChartOverlay: (key: 'ob' | 'fvg' | 'bos' | 'tp' | 'sl', value: boolean) => void
@@ -154,6 +159,8 @@ export const useStore = create<AuricStore>((set) => ({
   bridgeStatus: 'disconnected',
   botRunning: false,
   activeStrategy: 'ema_crossover',
+  balance: 0,
+  equity: 0,
 
   // Fetchable data
   user: null,
@@ -196,6 +203,8 @@ export const useStore = create<AuricStore>((set) => ({
   setRiskProfile: (riskProfile) => set({ riskProfile }),
   setTrades: (trades) => set({ trades }),
   setBacktestResult: (backtestResult) => set({ backtestResult }),
+  setBalance: (balance) => set({ balance }),
+  setEquity: (equity) => set({ equity }),
   setSelectedPair: (selectedPair) => set({ selectedPair }),
   setSelectedTimeframe: (selectedTimeframe) => set({ selectedTimeframe }),
   setChartOverlay: (key, value) => set((state) => ({
