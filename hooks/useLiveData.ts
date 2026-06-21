@@ -91,6 +91,9 @@ export function useLiveData() {
               case 'bridge_disconnected':
                 setBridgeStatus('disconnected')
                 break
+              case 'bridge_status':
+                setBridgeStatus(message.connected ? 'connected' : 'disconnected')
+                break
               default:
                 break
             }

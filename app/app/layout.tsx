@@ -142,17 +142,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       try {
         const res = await fetch('/api/bridge/status')
         const data = await res.json()
-        setBridgeStatus(data.connected ? 'connected' : 'disconnected')
+        
+        const currentStatus = useStore.getState().bridgeStatus
+        if (data.connected) {
+          setBridgeStatus('connected')
+        } else if (currentStatus !== 'connected' && currentStatus !== 'connecting') {
+          setBridgeStatus('disconnected')
+        }
+
         // Show broker link modal on first check if not connected
         if (!brokerCheckedRef.current) {
           brokerCheckedRef.current = true
           setBrokerChecked(true)
-          if (!data.connected) {
+          const updatedStatus = useStore.getState().bridgeStatus
+          if (!data.connected && updatedStatus !== 'connected' && updatedStatus !== 'connecting') {
             setShowBrokerModal(true)
           }
         }
       } catch {
-        setBridgeStatus('disconnected')
+        const currentStatus = useStore.getState().bridgeStatus
+        if (currentStatus !== 'connected' && currentStatus !== 'connecting') {
+          setBridgeStatus('disconnected')
+        }
       }
     }
     checkBridge()

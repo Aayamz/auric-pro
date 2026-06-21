@@ -1131,6 +1131,14 @@ async def client_endpoint(websocket: WebSocket):
         return
 
     await client_manager.connect(user_id, websocket)
+    
+    # Send current bridge status immediately to the connected client browser
+    is_connected = user_id in bridge_manager.active_connections or user_id in active_direct_loops
+    await websocket.send_json({
+        "type": "bridge_status",
+        "connected": is_connected
+    })
+    
     try:
         while True:
             cmd = await websocket.receive_json()
