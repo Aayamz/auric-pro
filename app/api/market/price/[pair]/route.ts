@@ -10,7 +10,12 @@ export async function GET(
   const pair = rawPair || 'XAUUSD'
 
   try {
-    const res = await fetch(`${PYTHON_API_URL}/price/${pair}`, { cache: 'no-store' })
+    const res = await fetch(`${PYTHON_API_URL}/price/${pair}`, {
+      cache: 'no-store',
+      headers: {
+        'ngrok-skip-browser-warning': 'any-value'
+      }
+    })
     if (!res.ok) {
       throw new Error(`FastAPI price endpoint returned status ${res.status}`)
     }

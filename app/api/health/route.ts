@@ -49,7 +49,12 @@ export async function GET() {
     const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
     const controller = new AbortController()
     const id = setTimeout(() => controller.abort(), 2000)
-    const res = await fetch(`${PYTHON_API_URL}/regime`, { signal: controller.signal })
+    const res = await fetch(`${PYTHON_API_URL}/regime`, { 
+      signal: controller.signal,
+      headers: {
+        'ngrok-skip-browser-warning': 'any-value'
+      }
+    })
     clearTimeout(id)
     if (res.ok) {
       status.pythonApi.connected = true

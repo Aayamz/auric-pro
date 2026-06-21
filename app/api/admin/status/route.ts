@@ -61,7 +61,10 @@ export async function GET() {
       
       let bridgeStatus = { connected: false, balance: 10000.0, equity: 10000.0 }
       try {
-        const res = await fetch(`${PYTHON_API_URL}/bridge/status/${b.user_id}`, { cache: 'no-store' })
+        const res = await fetch(`${PYTHON_API_URL}/bridge/status/${b.user_id}`, {
+          cache: 'no-store',
+          headers: { 'ngrok-skip-browser-warning': 'any-value' }
+        })
         if (res.ok) {
           bridgeStatus = await res.json()
         }

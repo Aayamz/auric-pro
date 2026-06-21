@@ -39,7 +39,10 @@ export async function POST(
       const endpoint = action === 'halt' ? 'stop' : action
       const res = await fetch(`${PYTHON_API_URL}/trading/${endpoint}/${userId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'any-value'
+        },
         signal: AbortSignal.timeout(5000)
       })
       if (res.ok) {
@@ -83,6 +86,9 @@ export async function GET(
     try {
       const res = await fetch(`${PYTHON_API_URL}/trading/status/${userId}`, {
         cache: 'no-store',
+        headers: {
+          'ngrok-skip-browser-warning': 'any-value'
+        },
         signal: AbortSignal.timeout(5000)
       })
       if (res.ok) {

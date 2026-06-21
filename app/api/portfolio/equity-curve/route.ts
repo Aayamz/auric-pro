@@ -37,20 +37,28 @@ export async function GET() {
       .eq('status', 'closed')
       .order('opened_at', { ascending: true })
 
-    const initialBalance = await getLiveBalance(userId)
-    let running = initialBalance
-    const curve = (trades ?? []).map(t => {
-      running += t.pnl_usd ?? 0
-      return { ts: t.opened_at, equity: parseFloat(running.toFixed(2)) }
-    })
+    const closedTrades = trades ?? []
+    const currentBalance = await getLiveBalance(userId)
 
-    // Always include starting point with the real balance
-    if (curve.length === 0) {
-      return NextResponse.json([{ ts: new Date().toISOString(), equity: initialBalance }])
+    // The current balance already reflects all closed trade P&L.
+    // Reconstruct history: starting balance = current balance - total closed P&L
+    const totalClosedPnl = closedTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0)
+    const startingBalance = parseFloat((currentBalance - totalClosedPnl).toFixed(2))
+
+    if (closedTrades.length === 0) {
+      return NextResponse.json([{ ts: new Date().toISOString(), equity: currentBalance }])
     }
 
-    // Prepend the initial balance as the first point
-    curve.unshift({ ts: curve[0].ts, equity: initialBalance })
+    // Walk forward through closed trades from the true starting balance
+    let running = startingBalance
+    const curve = closedTrades.map(t => {
+      running = parseFloat((running + (t.pnl_usd ?? 0)).toFixed(2))
+      return { ts: t.opened_at, equity: running }
+    })
+
+    // Prepend starting point and append current live balance as the final point
+    curve.unshift({ ts: closedTrades[0].opened_at, equity: startingBalance })
+    curve.push({ ts: new Date().toISOString(), equity: currentBalance })
 
     return NextResponse.json(curve)
   } catch (err: any) {

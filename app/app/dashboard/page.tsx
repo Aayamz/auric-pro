@@ -320,9 +320,18 @@ export default function DashboardPage() {
               onChange={(e) => setSelectedPair(e.target.value)}
               className="form-input bg-canvas font-mono font-medium focus:outline-none w-full sm:w-[160px]"
             >
-              <option value="XAUUSD">XAUUSD (Gold)</option>
-              <option value="EURUSD">EURUSD</option>
-              <option value="GBPUSD">GBPUSD</option>
+              {/* Default pairs always shown */}
+              {Array.from(
+                new Set([
+                  'XAUUSD',
+                  'EURUSD',
+                  'GBPUSD',
+                  // Dynamically inject symbols from live MT5 positions
+                  ...(positions ?? []).map((p: MTPosition) => p.symbol)
+                ])
+              ).map((pair) => (
+                <option key={pair} value={pair}>{pair}</option>
+              ))}
             </select>
           </div>
 

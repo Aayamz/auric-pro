@@ -46,7 +46,10 @@ export async function GET() {
     try {
       const res = await fetch(`${PYTHON_API_URL}/bridge/status/${userId}`, {
         cache: 'no-store',
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(5000),
+        headers: {
+          'ngrok-skip-browser-warning': 'any-value'
+        }
       })
       if (res.ok) {
         const data = await res.json()

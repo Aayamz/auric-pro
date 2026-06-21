@@ -52,7 +52,9 @@ export async function GET(
 
   if (feature === 'regime') {
     try {
-      const res = await fetch(`${PYTHON_API_URL}/regime`)
+      const res = await fetch(`${PYTHON_API_URL}/regime`, {
+        headers: { 'ngrok-skip-browser-warning': 'any-value' }
+      })
       if (!res.ok) {
         throw new Error(`FastAPI backend responded with status ${res.status}`)
       }
@@ -101,7 +103,9 @@ export async function GET(
       // Fetch regime from FastAPI
       let regime = 'ranging'
       try {
-        const regimeRes = await fetch(`${PYTHON_API_URL}/regime`)
+        const regimeRes = await fetch(`${PYTHON_API_URL}/regime`, {
+          headers: { 'ngrok-skip-browser-warning': 'any-value' }
+        })
         if (regimeRes.ok) {
           const regimeData = await regimeRes.json()
           regime = regimeData.regime

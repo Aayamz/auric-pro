@@ -62,7 +62,10 @@ export async function PUT(req: NextRequest) {
     try {
       const setupRes = await fetch(`${PYTHON_API_URL}/bridge/setup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'any-value'
+        },
         body: JSON.stringify({ 
           user_id: userId, 
           login: numericLogin, 
@@ -83,6 +86,9 @@ export async function PUT(req: NextRequest) {
     try {
       await fetch(`${PYTHON_API_URL}/bridge/stop/${userId}`, {
         method: 'POST',
+        headers: {
+          'ngrok-skip-browser-warning': 'any-value'
+        },
         signal: AbortSignal.timeout(2000)
       })
     } catch {}

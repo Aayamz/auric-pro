@@ -15,7 +15,10 @@ export async function GET(request: Request) {
 
   try {
     const res = await fetch(`${PYTHON_API_URL}/ohlcv?pair=${pair}&tf=${tf}&bars=${bars}&user_id=${user_id}`, {
-      next: { revalidate: 10 } // Cache for 10s
+      next: { revalidate: 10 }, // Cache for 10s
+      headers: {
+        'ngrok-skip-browser-warning': 'any-value'
+      }
     })
     
     if (!res.ok) {

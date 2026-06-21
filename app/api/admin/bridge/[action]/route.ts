@@ -56,11 +56,20 @@ export async function POST(
   try {
     let res
     if (action === 'start') {
-      res = await fetch(`${PYTHON_API_URL}/bridge/start/${user_id}`, { method: 'POST' })
+      res = await fetch(`${PYTHON_API_URL}/bridge/start/${user_id}`, {
+        method: 'POST',
+        headers: { 'ngrok-skip-browser-warning': 'any-value' }
+      })
     } else if (action === 'stop') {
-      res = await fetch(`${PYTHON_API_URL}/bridge/stop/${user_id}`, { method: 'POST' })
+      res = await fetch(`${PYTHON_API_URL}/bridge/stop/${user_id}`, {
+        method: 'POST',
+        headers: { 'ngrok-skip-browser-warning': 'any-value' }
+      })
     } else if (action === 'sync') {
-      res = await fetch(`${PYTHON_API_URL}/bridge/sync/${user_id}`, { method: 'POST' })
+      res = await fetch(`${PYTHON_API_URL}/bridge/sync/${user_id}`, {
+        method: 'POST',
+        headers: { 'ngrok-skip-browser-warning': 'any-value' }
+      })
     } else {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
     }
