@@ -328,6 +328,7 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
             return
         print(f"[DirectEngine] Starting cmd_reader loop for cmd:{user_id}...")
         while True:
+            pubsub = None
             try:
                 pubsub = redis_client.pubsub()
                 await pubsub.subscribe(f"cmd:{user_id}")
@@ -344,6 +345,13 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
             except Exception as e:
                 print(f"[DirectEngine] cmd_reader error: {e}. Retrying subscription in 2s...")
                 await asyncio.sleep(2.0)
+            finally:
+                if pubsub:
+                    try:
+                        await pubsub.unsubscribe()
+                        await pubsub.close()
+                    except Exception as close_err:
+                        print(f"[DirectEngine] Error closing pubsub: {close_err}")
 
     cmd_task = asyncio.create_task(cmd_reader())
     # ────────────────────────────────────────────────────────────────────────
@@ -677,8 +685,8 @@ client_manager = ClientManager()
 
 async def broadcast_to_client(user_id: str, event: dict):
     """Broadcast an event to both Redis and active WebSocket connections to prevent mismatches."""
-    # 1. Publish to Redis if available
-    if redis_client:
+    # 1. Publish to Redis if available (Skip high-frequency price updates to stay within Upstash limits)
+    if redis_client and event.get("type") != "price":
         try:
             await redis_client.publish(f"bridge:{user_id}", json.dumps(event))
         except Exception as e:
@@ -710,6 +718,7 @@ async def redis_command_listener(user_id: str, ws: WebSocket):
             print(f"Error sending local command down: {e}")
 
     if redis_client:
+        pubsub = None
         try:
             pubsub = redis_client.pubsub()
             await pubsub.subscribe(f"cmd:{user_id}")
@@ -723,9 +732,16 @@ async def redis_command_listener(user_id: str, ws: WebSocket):
                     await ws.send_json(cmd_data)
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
-            await pubsub.unsubscribe(f"cmd:{user_id}")
+            pass
         except Exception as e:
             print(f"Redis command listener error for {user_id}: {e}")
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe(f"cmd:{user_id}")
+                    await pubsub.close()
+                except Exception as close_err:
+                    print(f"Error closing pubsub in command listener: {close_err}")
     else:
         # Register local subscription
         memory_pubsub.subscribe(f"cmd:{user_id}", memory_cb)
@@ -774,22 +790,30 @@ async def bridge_endpoint(websocket: WebSocket):
                     "ask": data.get("ask")
                 }
 
-            # Route to Redis pub/sub if running, otherwise relay directly to client
+            # Route to Redis pub/sub if running (Skip price ticks to save Upstash command quota)
             if redis_client:
-                await redis_client.publish(f"bridge:{user_id}", json.dumps(data))
-                # Set status in Redis with a TTL of 10 seconds
-                status_data = {
-                    "connected": True,
-                    "last_seen": datetime.now().isoformat(),
-                    "balance": data.get("balance", 10000.00),
-                    "equity": data.get("equity", 10000.00)
-                }
-                await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
-            else:
-                # Offline fallback: send directly over WebSocket to Node client socket
-                await client_manager.send_message(user_id, data)
-                # Memory fallback publish
-                memory_pubsub.publish(f"bridge:{user_id}", json.dumps(data))
+                if data.get("type") != "price":
+                    try:
+                        await redis_client.publish(f"bridge:{user_id}", json.dumps(data))
+                    except Exception as e:
+                        print(f"[Bridge] Redis publish error: {e}")
+                
+                # Set status in Redis only for positions/connection updates
+                if data.get("type") == "positions":
+                    status_data = {
+                        "connected": True,
+                        "last_seen": datetime.now().isoformat(),
+                        "balance": data.get("balance", 10000.00),
+                        "equity": data.get("equity", 10000.00)
+                    }
+                    try:
+                        await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
+                    except Exception as e:
+                        print(f"[Bridge] Redis status setex error: {e}")
+
+            # Always send directly over WebSocket to client and memory pub/sub
+            await client_manager.send_message(user_id, data)
+            memory_pubsub.publish(f"bridge:{user_id}", json.dumps(data))
     except WebSocketDisconnect:
         pass
     except Exception as e:

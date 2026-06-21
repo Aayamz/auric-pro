@@ -189,6 +189,7 @@ def execute_mock_trade(cmd):
     }
     mock_positions.append(position)
     print(f"[MOCK] Opened position {ticket}: {position}")
+    return position
 
 async def real_price_stream(ws):
     terminal_symbol = resolve_mt5_symbol("XAUUSD")
@@ -273,7 +274,7 @@ def execute_real_trade(cmd):
     info = mt5.symbol_info(terminal_symbol)
     if not info:
         print(f"Error: Symbol {terminal_symbol} not found on server.")
-        return
+        return None
         
     action_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     price = mt5.symbol_info_tick(terminal_symbol).ask if direction == "BUY" else mt5.symbol_info_tick(terminal_symbol).bid
@@ -294,6 +295,7 @@ def execute_real_trade(cmd):
     
     result = send_order_with_filling_fallback(request)
     print(f"MT5 final execution result: {result}")
+    return result
 
 async def command_listener(ws, is_mock):
     async for message in ws:
@@ -304,15 +306,44 @@ async def command_listener(ws, is_mock):
             
             if cmd_type == "open_trade":
                 if is_mock:
-                    execute_mock_trade(cmd)
+                    pos = execute_mock_trade(cmd)
+                    if pos:
+                        await ws.send(json.dumps({
+                            "type": "trade_opened",
+                            "ticket": pos["ticket"],
+                            "pair": pos["symbol"],
+                            "direction": pos["type"],
+                            "lots": pos["volume"],
+                            "open_price": pos["open_price"]
+                        }))
                 else:
-                    execute_real_trade(cmd)
+                    result = execute_real_trade(cmd)
+                    if result and result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]:
+                        await ws.send(json.dumps({
+                            "type": "trade_opened",
+                            "ticket": result.order,
+                            "pair": cmd.get("pair", "XAUUSD"),
+                            "direction": cmd.get("direction"),
+                            "lots": cmd.get("lots"),
+                            "open_price": result.price
+                        }))
+                    else:
+                        retcode = result.retcode if result else "no_result"
+                        comment = result.comment if result else "Unknown error"
+                        await ws.send(json.dumps({
+                            "type": "trade_error",
+                            "message": f"MT5 order failed: retcode={retcode} — {comment}"
+                        }))
             elif cmd_type == "close_trade":
                 ticket = cmd.get("ticket")
                 if is_mock:
                     global mock_positions
                     mock_positions = [p for p in mock_positions if p["ticket"] != ticket]
                     print(f"[MOCK] Closed position: {ticket}")
+                    await ws.send(json.dumps({
+                        "type": "trade_closed",
+                        "ticket": ticket
+                    }))
                 else:
                     # MT5 Close Deal
                     # Find open position
@@ -337,16 +368,31 @@ async def command_listener(ws, is_mock):
                         }
                         result = send_order_with_filling_fallback(request)
                         print(f"MT5 position close result: {result}")
+                        if result and result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]:
+                            await ws.send(json.dumps({
+                                "type": "trade_closed",
+                                "ticket": ticket
+                            }))
+                        else:
+                            retcode = result.retcode if result else "no_result"
+                            await ws.send(json.dumps({
+                                "type": "trade_error",
+                                "message": f"MT5 position close failed: retcode={retcode}"
+                            }))
             elif cmd_type == "modify_trade":
                 ticket = cmd.get("ticket")
                 sl = cmd.get("sl")
-                tp = cmd.get("tp")
+                tp = cmd.get("tp") if cmd.get("tp") is not None else cmd.get("tp1")
                 if is_mock:
                     for p in mock_positions:
                         if p["ticket"] == ticket:
                             if sl is not None: p["sl"] = sl
                             if tp is not None: p["tp"] = tp
                             print(f"[MOCK] Modified position {ticket}: sl={sl}, tp={tp}")
+                    await ws.send(json.dumps({
+                        "type": "trade_modified",
+                        "ticket": ticket
+                    }))
                 else:
                     # MT5 Modify SL/TP
                     positions = mt5.positions_get(ticket=ticket)
@@ -360,6 +406,17 @@ async def command_listener(ws, is_mock):
                         }
                         result = mt5.order_send(request)
                         print(f"MT5 modify result: {result}")
+                        if result and result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]:
+                            await ws.send(json.dumps({
+                                "type": "trade_modified",
+                                "ticket": ticket
+                            }))
+                        else:
+                            retcode = result.retcode if result else "no_result"
+                            await ws.send(json.dumps({
+                                "type": "trade_error",
+                                "message": f"MT5 modify failed: retcode={retcode}"
+                            }))
         except Exception as e:
             print(f"Error handling message: {e}")
 
