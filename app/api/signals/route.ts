@@ -39,3 +39,38 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: err.message || 'Database connection error' }, { status: 500 })
   }
 }
+
+/**
+ * POST /api/signals
+ * Proxies signal generation request to the Python backend to generate a new signal.
+ */
+export async function POST(request: Request) {
+  const userId = await getCurrentUserId()
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  try {
+    const body = await request.json().catch(() => ({}))
+    const pair = body.pair || 'XAUUSD'
+    const tf = body.tf || 'M15'
+    const strategyName = body.strategy_name || 'ema_crossover'
+
+    const pythonApiUrl = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+    const response = await fetch(
+      `${pythonApiUrl}/signal/generate?pair=${pair}&tf=${tf}&strategy_name=${strategyName}&user_id=${userId}`,
+      { method: 'POST' }
+    )
+
+    if (!response.ok) {
+      const errText = await response.text()
+      return NextResponse.json({ error: `Backend returned error: ${errText}` }, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Signal generation failed' }, { status: 500 })
+  }
+}
+

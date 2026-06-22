@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Send, Bot, User, Brain, Loader2 } from 'lucide-react'
+import { formatISTTime } from '@/lib/time'
 
 interface Message { id: string; role: 'user' | 'assistant'; content: string; ts: number }
 
@@ -151,7 +152,7 @@ export default function AiAdvisorPage() {
               }`}>
                 {renderMessageContent(msg.content)}
                 <div className={`font-mono text-[9px] mt-xxs ${msg.role === 'user' ? 'text-on-primary/60 text-right' : 'text-mute'}`}>
-                  {new Date(msg.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                  {formatISTTime(msg.ts)}
                 </div>
               </div>
             </div>

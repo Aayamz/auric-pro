@@ -8,6 +8,7 @@ import { createChart, IChartApi, ISeriesApi, CandlestickSeries, Time } from 'lig
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUp, ArrowDown, X, AlertTriangle, Loader2, WifiOff } from 'lucide-react'
 import { getBaseApiUrl } from '@/lib/api-helper'
+import { IST_TZ } from '@/lib/time'
 
 function ScalperContent() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
@@ -36,9 +37,13 @@ function ScalperContent() {
   // ATR calculation from OHLCV data (14-period)
   const [atr, setAtr] = useState<number | null>(null)
   const session = (() => {
-    const h = new Date().getUTCHours()
-    if (h >= 7 && h < 16) return 'London'
-    if (h >= 13 && h < 21) return 'New York'
+    // Session detection using IST (Asia/Kolkata = UTC+5:30)
+    const h = parseInt(
+      new Date().toLocaleString('en-IN', { timeZone: IST_TZ, hour: '2-digit', hour12: false })
+    )
+    // UTC offsets: London = 12:30 IST - 21:30 IST, New York = 18:30 IST - 02:30 IST, Asia = 05:00 IST - 14:00 IST
+    if (h >= 12 && h < 21) return 'London'
+    if (h >= 18 || h < 3) return 'New York'
     return 'Asia'
   })()
 

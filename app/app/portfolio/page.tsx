@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { Download, FileText, TrendingUp, Target, BarChart2, RefreshCw } from 'lucide-react'
 import { useStore } from '@/store'
+import { formatISTDate, IST_TZ } from '@/lib/time'
 
 interface Trade {
   id: string
@@ -67,7 +68,7 @@ export default function PortfolioPage() {
       const res = await fetch('/api/portfolio/equity-curve', { cache: 'no-store' })
       const raw = await res.json()
       return raw.map((d: Record<string, unknown>) => ({
-        date: new Date(d.ts as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        date: new Date(d.ts as string).toLocaleDateString('en-IN', { timeZone: IST_TZ, month: 'short', day: 'numeric' }),
         equity: d.equity
       }))
     },
@@ -200,7 +201,7 @@ export default function PortfolioPage() {
     return sorted.map(t => {
       running += t.pnl_usd ?? 0
       return {
-        date: new Date(t.opened_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        date: formatISTDate(t.opened_at),
         equity: Number(running.toFixed(2))
       }
     })
@@ -217,7 +218,7 @@ export default function PortfolioPage() {
       const dayTrades = dbTrades.filter(t => t.opened_at?.startsWith(dateStr))
       const pnl = dayTrades.reduce((sum, t) => sum + (t.pnl_usd ?? 0), 0)
       days.push({
-        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        date: d.toLocaleDateString('en-IN', { timeZone: IST_TZ, month: 'short', day: 'numeric' }),
         pnl
       })
     }
@@ -407,7 +408,7 @@ export default function PortfolioPage() {
                 return (
                   <tr key={t.id} className="hover:bg-canvas-soft text-body-sm text-body-text transition-colors">
                     <td className="p-sm font-mono text-caption-mono text-mute whitespace-nowrap">
-                      {new Date(t.opened_at).toLocaleDateString()}
+                      {formatISTDate(t.opened_at)}
                     </td>
                     <td className="p-sm font-semibold text-ink">{t.pair}</td>
                     <td className="p-sm">

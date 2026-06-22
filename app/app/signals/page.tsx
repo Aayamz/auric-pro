@@ -1,10 +1,11 @@
 'use client'
 
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { ChevronRight, X, Radio, RefreshCw } from 'lucide-react'
+import { ChevronRight, X, Radio, RefreshCw, Clock, Trash2 } from 'lucide-react'
 import { useStore } from '@/store'
+import { formatISTTime, formatISTDateTime, IST_TZ } from '@/lib/time'
 
 interface SignalItem {
   id: string
@@ -30,7 +31,27 @@ export default function SignalsPage() {
   const [aiExplanation, setAiExplanation] = useState('')
   const [loadingAi, setLoadingAi] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
+  const [istNow, setIstNow] = useState('')
+  const [isPurging, setIsPurging] = useState(false)
   const itemsPerPage = 10
+  const autoGenRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Live clock in IST
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date()
+      setIstNow(now.toLocaleTimeString('en-IN', {
+        timeZone: IST_TZ,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      }))
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -50,13 +71,62 @@ export default function SignalsPage() {
       const res = await fetch(`/api/signals?${query.toString()}`)
       if (!res.ok) return []
       return res.json()
-    }
+    },
+    refetchInterval: 15000, // Auto-refresh DB signals every 15s
   })
+
+  // Auto-generate signals via backend every 30 seconds regardless of bot state
+  useEffect(() => {
+    const generateSignal = async () => {
+      try {
+        const strategies = ['order_block_reversal', 'fvg_scalper', 'liquidity_sweep', 'ema_crossover', 'tick_scalper']
+        const pairs = ['XAUUSD', 'EURUSD']
+        const strategy = strategies[Math.floor(Math.random() * strategies.length)]
+        const pair = pairs[Math.floor(Math.random() * pairs.length)]
+
+        await fetch('/api/signals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pair, tf: 'M15', strategy_name: strategy })
+        })
+        console.log('[Signals] Auto-generated new signal via API proxy')
+        // Refresh DB signals after generation
+        setTimeout(() => refetch(), 2000)
+      } catch (err) {
+        console.warn('[Signals] Auto-generation failed (backend may be restarting):', err)
+      }
+    }
+
+    // Purge old signals and generate one immediately on load
+    handlePurgeOldSignals()
+    generateSignal()
+
+    // Then every 30 seconds
+    autoGenRef.current = setInterval(generateSignal, 30000)
+
+    return () => {
+      if (autoGenRef.current) clearInterval(autoGenRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Purge old signals (older than 24h) from DB
+  async function handlePurgeOldSignals() {
+    setIsPurging(true)
+    try {
+      const res = await fetch('/api/signals/purge', { method: 'DELETE' })
+      if (res.ok) {
+        await refetch()
+      }
+    } catch (err) {
+      console.error('Purge failed:', err)
+    } finally {
+      setIsPurging(false)
+    }
+  }
 
   // Merge store (live) signals with DB signals — deduplicate by id, live signals take priority
   const signalsList = useMemo(() => {
-    const dbMap = new Map(dbSignals.map(s => [s.id, s]))
-
     // Apply client-side filters to store signals
     const filteredStore = storeSignals.filter(s => {
       if (filterPair && s.pair !== filterPair) return false
@@ -111,7 +181,7 @@ export default function SignalsPage() {
     <div className="space-y-lg flex flex-col h-full relative">
       
       {/* Title / Info Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between flex-wrap gap-md">
         <div className="flex flex-col">
           <h2 className="font-sans text-display-lg font-semibold text-ink tracking-tight">
             Signal Intelligence
@@ -120,15 +190,24 @@ export default function SignalsPage() {
             Review live strategy triggers, analytical confidence indices, and AI justifications.
           </p>
         </div>
-        {liveCount > 0 && (
-          <div className="flex items-center gap-xs px-sm py-xxs bg-success/10 border border-success/30 rounded-pill">
-            <span className="w-xxs h-xxs rounded-full bg-success animate-pulse inline-block" />
-            <span className="font-mono text-[10px] text-success uppercase font-semibold">
-              {liveCount} live signal{liveCount !== 1 ? 's' : ''}
+        <div className="flex items-center gap-sm flex-wrap">
+          {/* IST Clock */}
+          <div className="flex items-center gap-xs px-sm py-xxs bg-canvas border border-hairline rounded-pill shadow-level-2">
+            <Clock className="w-xxs h-xxs text-mute" />
+            <span className="font-mono text-[10px] text-body-text uppercase font-semibold">
+              {istNow} IST
             </span>
-            <Radio className="w-xxs h-xxs text-success" />
           </div>
-        )}
+          {liveCount > 0 && (
+            <div className="flex items-center gap-xs px-sm py-xxs bg-success/10 border border-success/30 rounded-pill">
+              <span className="w-xxs h-xxs rounded-full bg-success animate-pulse inline-block" />
+              <span className="font-mono text-[10px] text-success uppercase font-semibold">
+                {liveCount} live signal{liveCount !== 1 ? 's' : ''}
+              </span>
+              <Radio className="w-xxs h-xxs text-success" />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Filter Bar */}
@@ -158,6 +237,7 @@ export default function SignalsPage() {
               <option value="fvg_scalper">FVG Scalper</option>
               <option value="tick_scalper">Tick Scalper</option>
               <option value="liquidity_sweep">Liquidity Sweep</option>
+              <option value="ema_crossover">EMA Crossover</option>
             </select>
           </div>
           <div>
@@ -175,14 +255,25 @@ export default function SignalsPage() {
             </select>
           </div>
         </div>
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="bg-primary text-on-primary font-sans text-button-md font-medium px-md h-[36px] rounded-sm hover:opacity-90 transition-opacity mt-sm md:mt-0 flex items-center gap-xs disabled:opacity-60"
-        >
-          <RefreshCw className={`w-xxs h-xxs ${isFetching ? 'animate-spin' : ''}`} />
-          {isFetching ? 'Querying…' : 'Query Database'}
-        </button>
+        <div className="flex gap-sm items-center flex-wrap">
+          <button
+            onClick={handlePurgeOldSignals}
+            disabled={isPurging}
+            className="bg-canvas border border-hairline text-body-text font-sans text-button-md font-medium px-md h-[36px] rounded-sm hover:bg-error-soft hover:text-error hover:border-error/30 transition-colors flex items-center gap-xs disabled:opacity-60"
+            title="Remove signals older than 24 hours"
+          >
+            <Trash2 className="w-xxs h-xxs" />
+            {isPurging ? 'Purging…' : 'Purge Old'}
+          </button>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="bg-primary text-on-primary font-sans text-button-md font-medium px-md h-[36px] rounded-sm hover:opacity-90 transition-opacity flex items-center gap-xs disabled:opacity-60"
+          >
+            <RefreshCw className={`w-xxs h-xxs ${isFetching ? 'animate-spin' : ''}`} />
+            {isFetching ? 'Querying…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {/* Signals Table */}
@@ -191,7 +282,7 @@ export default function SignalsPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-canvas-soft-2 border-b border-hairline font-mono text-caption-mono text-mute">
-                <th className="p-sm">TIME</th>
+                <th className="p-sm">TIME (IST)</th>
                 <th className="p-sm">PAIR</th>
                 <th className="p-sm">DIRECTION</th>
                 <th className="p-sm">STRATEGY</th>
@@ -219,7 +310,7 @@ export default function SignalsPage() {
                           {isFromStore && (
                             <span className="w-[5px] h-[5px] rounded-full bg-success animate-pulse inline-block shrink-0" title="Live signal" />
                           )}
-                          {new Date(sig.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {formatISTTime(sig.created_at)}
                         </span>
                       </td>
                       <td className="p-sm font-semibold text-ink">{sig.pair}</td>
@@ -260,9 +351,11 @@ export default function SignalsPage() {
                   <td colSpan={10} className="text-center py-xl">
                     <div className="flex flex-col items-center gap-xs text-mute">
                       <Radio className="w-sm h-sm opacity-30" />
-                      <span className="font-sans text-body-sm">No signals matched your criteria.</span>
+                      <span className="font-sans text-body-sm">
+                        {isFetching ? 'Loading signals…' : 'No signals matched your criteria.'}
+                      </span>
                       <span className="font-mono text-caption-mono text-[10px]">
-                        Signals will appear here when the trading engine generates them, or click &quot;Query Database&quot; to fetch historical ones.
+                        New signals are auto-generated every 30 seconds and will appear here in real-time.
                       </span>
                     </div>
                   </td>
@@ -354,7 +447,7 @@ export default function SignalsPage() {
             <div className="space-y-sm text-body-sm text-body-text">
               <div className="flex justify-between">
                 <span>Signal Reference ID</span>
-                <span className="font-mono text-[10px] text-mute">{selectedSignal.id}</span>
+                <span className="font-mono text-[10px] text-mute">{selectedSignal.id.slice(0, 16)}…</span>
               </div>
               <div className="flex justify-between">
                 <span>Asset Class / Pair</span>
@@ -367,12 +460,16 @@ export default function SignalsPage() {
                 }`}>{selectedSignal.direction}</span>
               </div>
               <div className="flex justify-between">
-                <span>Trigger Time</span>
-                <span className="font-mono text-caption-mono">{new Date(selectedSignal.created_at).toLocaleTimeString()}</span>
+                <span>Trigger Time (IST)</span>
+                <span className="font-mono text-caption-mono">{formatISTDateTime(selectedSignal.created_at)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Trigger Price</span>
                 <span className="font-mono text-caption-mono font-semibold text-ink">${selectedSignal.entry_price}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Stop Loss</span>
+                <span className="font-mono text-caption-mono text-error font-semibold">${selectedSignal.sl_price}</span>
               </div>
               <div className="flex justify-between">
                 <span>Confidence Index</span>

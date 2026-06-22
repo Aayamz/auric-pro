@@ -8,8 +8,16 @@ import time
 import sys
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
+
+# IST timezone offset: UTC+5:30
+IST_OFFSET = timezone(timedelta(hours=5, minutes=30))
+
+def ist_now_iso() -> str:
+    """Return current IST time as ISO string."""
+    return datetime.now(IST_OFFSET).isoformat()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as aioredis
@@ -168,7 +176,7 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
             
             trades_to_seed = []
             for i in range(15):
-                d = datetime.now() - timedelta(days=(15 - i) + random.uniform(-0.2, 0.2))
+                d = datetime.now(IST_OFFSET) - timedelta(days=(15 - i) + random.uniform(-0.2, 0.2))
                 direction = random.choice(["BUY", "SELL"])
                 lots = random.choice([0.01, 0.02, 0.05])
                 open_price = 1930.0 + random.uniform(-20, 20)
@@ -484,7 +492,7 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                     if redis_client:
                         status_data = {
                             "connected": True,
-                            "last_seen": datetime.now().isoformat(),
+                            "last_seen": ist_now_iso(),
                             "balance": balance,
                             "equity": equity,
                             "login": login if login else (acc_info.login if acc_info else None),
@@ -498,7 +506,7 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                     active_accounts[user_id] = {
                         "balance": balance,
                         "equity": equity,
-                        "last_seen": datetime.now().isoformat()
+                        "last_seen": ist_now_iso()
                     }
                 else:
                     mock_pos = active_mock_positions.setdefault(user_id, [])
@@ -524,7 +532,7 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                     if redis_client:
                         status_data = {
                             "connected": True,
-                            "last_seen": datetime.now().isoformat(),
+                            "last_seen": ist_now_iso(),
                             "balance": balance,
                             "equity": equity,
                             "login": login,
@@ -538,31 +546,35 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                     active_accounts[user_id] = {
                         "balance": balance,
                         "equity": equity,
-                        "last_seen": datetime.now().isoformat()
+                        "last_seen": ist_now_iso()
                     }
 
-            # 3. Strategy / Signal Generation (every 20.0s, when bot is running)
+            # 3. Strategy / Signal Generation (every 20.0s, always — bot active = also auto-execute)
             if counter % 40 == 0:
                 bot_active = False
                 if redis_client:
                     bot_active = (await redis_client.get(f"bot_running:{user_id}")) == "true"
                 else:
                     bot_active = bot_running_fallback.get(user_id, False)
-                
+
+                # Always generate signals (regardless of bot state) so Signals page is always populated
+                strat_name = "ema_crossover"
+                user_strat = await asyncio.to_thread(
+                    supabase_request, "GET", f"user_strategies?user_id=eq.{user_id}&is_active=eq.true&limit=1"
+                )
+                if user_strat and isinstance(user_strat, list) and len(user_strat) > 0:
+                    strat_name = user_strat[0].get("strategy_name", "ema_crossover")
+
+                # Rotate through multiple strategies to keep signals varied
+                strategy_pool = ["order_block_reversal", "fvg_scalper", "liquidity_sweep", "ema_crossover", "tick_scalper"]
+                active_strat = strat_name if strat_name in strategy_pool else random.choice(strategy_pool)
+
+                print(f"[DirectEngine] Generating signal for user {user_id} via {active_strat} (bot_active={bot_active})...")
+                signal = await create_signal(pair="XAUUSD", tf="M15", strategy_name=active_strat, user_id=user_id)
+                print(f"[DirectEngine] Generated signal: {signal['direction']} on {signal['pair']} via {signal['strategy']}")
+
+                # Auto-execute trade only when algo bot is running
                 if bot_active:
-                    print(f"[DirectEngine] Bot is active for user {user_id}. Executing strategy logic...")
-                    strat_name = "ema_crossover"
-                    user_strat = await asyncio.to_thread(
-                        supabase_request, "GET", f"user_strategies?user_id=eq.{user_id}&is_active=eq.true&limit=1"
-                    )
-                    if user_strat and isinstance(user_strat, list) and len(user_strat) > 0:
-                        strat_name = user_strat[0].get("strategy_name", "ema_crossover")
-                    
-                    # Generate a signal
-                    signal = await generate_signal(pair="XAUUSD", tf="M15", strategy_name=strat_name, user_id=user_id)
-                    print(f"[DirectEngine] Generated signal: {signal['direction']} on {signal['pair']} via {signal['strategy']}")
-                    
-                    # Auto-execute trade since algo is active
                     lots = 0.05
                     risk_profile = await asyncio.to_thread(
                         supabase_request, "GET", f"risk_profiles?user_id=eq.{user_id}&limit=1"
@@ -1260,7 +1272,7 @@ async def bridge_endpoint(websocket: WebSocket):
                 active_accounts[user_id] = {
                     "balance": data.get("balance", 10000.00),
                     "equity": data.get("equity", 10000.00),
-                    "last_seen": datetime.now().isoformat(),
+                    "last_seen": ist_now_iso(),
                     "tickets": curr_tickets
                 }
                 
@@ -1301,7 +1313,7 @@ async def bridge_endpoint(websocket: WebSocket):
                 if data.get("type") == "positions":
                     status_data = {
                         "connected": True,
-                        "last_seen": datetime.now().isoformat(),
+                        "last_seen": ist_now_iso(),
                         "balance": data.get("balance", 10000.00),
                         "equity": data.get("equity", 10000.00)
                     }
@@ -1649,8 +1661,8 @@ async def execute_direct_command(user_id: str, cmd: dict, is_mock: bool):
                         "strategy": "order_block_reversal",
                         "session": "New York",
                         "status": "closed",
-                        "opened_at": datetime.now().isoformat(),
-                        "closed_at": datetime.now().isoformat()
+                        "opened_at": ist_now_iso(),
+                        "closed_at": ist_now_iso()
                     }
                     await asyncio.to_thread(supabase_request, "POST", "trades", trade_record)
                     print(f"[DirectMock-{user_id}] Closed trade: {trade_record}")
@@ -1909,7 +1921,7 @@ async def get_bridge_status(user_id: str):
     info = active_accounts.get(user_id, {
         "balance": 0,
         "equity": 0,
-        "last_seen": datetime.now().isoformat()
+        "last_seen": ist_now_iso()
     })
     return {
         "connected": connected,
@@ -2106,16 +2118,32 @@ async def get_latest_price(pair: str):
     fallback_bid = float(os.getenv("MOCK_XAUUSD_BASE_PRICE", "3300.0"))
     return latest_prices.get(pair, {"bid": fallback_bid, "ask": round(fallback_bid + 0.5, 2)})
 
-@app.post("/signal/generate")
-async def generate_signal(pair: str, tf: str, strategy_name: str, user_id: str):
-    # Simulated strategy execution and signal generator
+# IST offset and ist_now_iso() helper are defined at the top of the file
+
+async def create_signal(pair: str, tf: str, strategy_name: str, user_id: str) -> dict:
+    """Internal helper to build and persist a signal with IST timestamp."""
     latest = latest_prices.get(pair)
-    base_price = latest["bid"] if latest else 1950.0
-    
+    base_price = latest["bid"] if latest else float(os.getenv("MOCK_XAUUSD_BASE_PRICE", "3300.0"))
+
+    # Use realistic price levels based on base price
     direction = random.choice(["BUY", "SELL"])
-    entry_price = base_price + (0.5 if direction == "BUY" else -0.5)
-    sl_price = entry_price - 5.0 if direction == "BUY" else entry_price + 5.0
-    
+    spread = round(random.uniform(0.3, 1.2), 2)
+    entry_price = base_price + (spread if direction == "BUY" else -spread)
+    sl_distance = round(random.uniform(4.0, 12.0), 2)
+    tp_multipliers = [1.5, 2.5, 3.5]
+    sl_price = entry_price - sl_distance if direction == "BUY" else entry_price + sl_distance
+
+    tp_levels = [
+        {"rr": tp_multipliers[i], "price": round(
+            entry_price + sl_distance * tp_multipliers[i] if direction == "BUY"
+            else entry_price - sl_distance * tp_multipliers[i], 2
+        )}
+        for i in range(3)
+    ]
+
+    rsi = round(random.uniform(28.0, 72.0), 1)
+    atr = round(random.uniform(1.5, 4.5), 2)
+
     signal = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -2126,16 +2154,26 @@ async def generate_signal(pair: str, tf: str, strategy_name: str, user_id: str):
         "confidence": round(random.uniform(65.0, 94.0), 2),
         "entry_price": round(entry_price, 2),
         "sl_price": round(sl_price, 2),
-        "tp_levels": [
-            {"rr": 1, "price": round(entry_price + 5.0 if direction == "BUY" else entry_price - 5.0, 2)},
-            {"rr": 2, "price": round(entry_price + 10.0 if direction == "BUY" else entry_price - 10.0, 2)},
-            {"rr": 3, "price": round(entry_price + 15.0 if direction == "BUY" else entry_price - 15.0, 2)}
-        ],
-        "indicator_values": {"rsi": 42.5, "atr": 2.4, "ema9": round(base_price - 2.0, 2), "ema21": round(base_price - 3.5, 2)},
+        "tp_levels": tp_levels,
+        "indicator_values": {
+            "rsi": rsi,
+            "atr": atr,
+            "ema9": round(base_price - 2.0, 2),
+            "ema21": round(base_price - 3.5, 2)
+        },
         "status": "LIVE",
-        "created_at": datetime.now().isoformat()
+        "created_at": ist_now_iso()  # IST timestamp
     }
-    
+
+    # Purge signals older than 24h for this user before saving new one
+    try:
+        cutoff = (datetime.now(IST_OFFSET) - timedelta(hours=24)).isoformat().replace('+', '%2B')
+        await asyncio.to_thread(
+            supabase_request, "DELETE", f"signals?user_id=eq.{user_id}&created_at=lt.{cutoff}"
+        )
+    except Exception as purge_err:
+        print(f"[Signal] Purge old signals error: {purge_err}")
+
     # Save to Supabase
     await asyncio.to_thread(supabase_request, "POST", "signals", signal)
 
@@ -2144,7 +2182,14 @@ async def generate_signal(pair: str, tf: str, strategy_name: str, user_id: str):
         "type": "signal",
         **signal
     })
-        
+
+    return signal
+
+
+@app.post("/signal/generate")
+async def generate_signal(pair: str, tf: str, strategy_name: str, user_id: str):
+    """HTTP endpoint: generate a new signal and persist it."""
+    signal = await create_signal(pair=pair, tf=tf, strategy_name=strategy_name, user_id=user_id)
     return signal
 
 # Backtest Runner simulation

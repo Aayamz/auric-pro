@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react'
 import { ComposedChart, Line, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { Play, Loader2, Brain } from 'lucide-react'
+import { IST_TZ } from '@/lib/time'
 
 function MetricCard({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
@@ -182,7 +183,7 @@ export default function BacktesterPage() {
                 <div className="h-[200px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={result.equity_curve?.map((d) => ({
-                      ts: new Date(d.ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                      ts: new Date(d.ts * 1000).toLocaleDateString('en-IN', { timeZone: IST_TZ, month: 'short', day: 'numeric' }),
                       equity: d.equity,
                       dd: (d.equity as number) < ((result.initial_balance as number) ?? 10000) ? (d.equity as number) - ((result.initial_balance as number) ?? 10000) : 0
                     }))}>
