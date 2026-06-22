@@ -1974,7 +1974,9 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
     start_time = latest_bar_time - (bars - 1) * tf_seconds
 
     # Walk oldest-to-newest: timestamps and OHLCV always aligned — no .reverse() bug
-    current_price = base_price - bars * 2.0
+    # Use a tighter spread so mock candles stay close to the live price and
+    # don't create huge discrepancies when the real-time tick update kicks in.
+    current_price = base_price - bars * 0.5
 
     data = []
     for i in range(bars):

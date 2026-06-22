@@ -287,6 +287,12 @@ export default function DashboardPage() {
     if (!livePrice || !livePrice.bid) return
     const bid = livePrice.bid
     const bar = lastBarRef.current
+    // Sanity check: reject price ticks that are wildly different from the last bar.
+    // This prevents massive phantom candles when OHLCV data and live prices
+    // come from different sources (e.g. mock OHLCV vs real MT5 tick).
+    const barMid = (bar.high + bar.low) / 2
+    const deviationPct = barMid > 0 ? Math.abs(bid - barMid) / barMid : 0
+    if (deviationPct > 0.03) return // >3% deviation — skip stale/mismatched tick
     const updated = {
       time: bar.time as Time,
       open: bar.open,
