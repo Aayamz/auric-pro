@@ -74,7 +74,7 @@ let redisPublisher: ReturnType<typeof createClient> | null = null
 let redisSubscriber: ReturnType<typeof createClient> | null = null
 
 async function initRedis() {
-  if (!REDIS_URL || REDIS_URL === 'redis://localhost:6379') {
+  if (!REDIS_URL || REDIS_URL === 'redis://localhost:6379' || REDIS_URL === 'redis://127.0.0.1:6379') {
     // Check if Redis is actually running before trying to connect
     try {
       const testClient = createClient({ url: REDIS_URL, socket: { connectTimeout: 2000, reconnectStrategy: false } })

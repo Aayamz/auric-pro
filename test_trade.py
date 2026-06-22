@@ -4,7 +4,7 @@ import websockets
 import json
 
 async def test():
-    uri = "ws://localhost:8000/ws/client?token=test_token"
+    uri = "ws://127.0.0.1:8000/ws/client?token=test_token"
     try:
         async with websockets.connect(uri) as ws:
             print("Connected to FastAPI WebSocket")
@@ -19,8 +19,8 @@ async def test():
                 "pair": "XAUUSD",
                 "direction": "BUY",
                 "lots": 0.01,
-                "sl": 3290.0,
-                "tp": 3320.0
+                "sl": 0.0,
+                "tp": 0.0
             }
             await ws.send(json.dumps(cmd))
             print(f"Sent: {cmd}")

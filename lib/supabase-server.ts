@@ -41,7 +41,15 @@ export async function getCurrentUserId(): Promise<string | null> {
       }
     )
     const { data: { user } } = await ssrClient.auth.getUser()
-    return user?.id || '00000000-0000-0000-0000-000000000000'
+    if (user?.id) return user.id
+
+    // Fallback to first broker account user_id in DB if not logged in
+    const serverClient = getSupabaseServerClient()
+    const { data } = await serverClient.from('broker_accounts').select('user_id').limit(1)
+    if (data && data.length > 0 && data[0].user_id) {
+      return data[0].user_id
+    }
+    return '00000000-0000-0000-0000-000000000000'
   } catch (e) {
     console.error('Error getting current user ID:', e)
     return null

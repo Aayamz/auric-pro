@@ -130,6 +130,7 @@ def resolve_mt5_symbol(pair: str) -> str:
         if mt5.symbol_select(pair, True):
             info = mt5.symbol_info(pair)
             if info and getattr(info, 'trade_mode', 4) != 0:
+                print(f"[SymbolResolver] Resolved {pair} directly")
                 return pair
         symbols = mt5.symbols_get()
         if symbols:
@@ -138,11 +139,14 @@ def resolve_mt5_symbol(pair: str) -> str:
             for s in matches:
                 if getattr(s, 'trade_mode', 4) != 0:
                     if mt5.symbol_select(s.name, True):
+                        print(f"[SymbolResolver] Resolved {pair} -> {s.name} (tradable)")
                         return s.name
             # 2. Fallback to any matching symbol
             for s in matches:
                 if mt5.symbol_select(s.name, True):
+                    print(f"[SymbolResolver] Resolved {pair} -> {s.name} (fallback match)")
                     return s.name
+        print(f"[SymbolResolver] No matching symbol found for {pair}. Using default fallback: {pair}")
     except Exception as e:
         print(f"Error resolving MT5 symbol for {pair}: {e}")
     return pair
@@ -156,6 +160,7 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
             strategies = ["order_block_reversal", "fvg_scalper", "trend_following", "liquidity_sweep"]
             sessions = ["London", "New York", "Asia"]
             
+            trades_to_seed = []
             for i in range(15):
                 d = datetime.now() - timedelta(days=(15 - i) + random.uniform(-0.2, 0.2))
                 direction = random.choice(["BUY", "SELL"])
@@ -184,7 +189,10 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
                     "opened_at": d.isoformat(),
                     "closed_at": (d + timedelta(hours=random.randint(1, 8))).isoformat()
                 }
-                await asyncio.to_thread(supabase_request, "POST", "trades", trade)
+                trades_to_seed.append(trade)
+            
+            if trades_to_seed:
+                await asyncio.to_thread(supabase_request, "POST", "trades", trades_to_seed)
             print("[SyncHistory] Completed seeding mock trades.")
         return
 
@@ -235,6 +243,7 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
         positions.setdefault(pos_id, []).append(deal_dict)
 
     reconstructed_count = 0
+    trades_to_insert = []
     for pos_id, pos_deals in positions.items():
         entry_deal = next((d for d in pos_deals if d.get("entry") == 0), None)
         exit_deal = next((d for d in pos_deals if d.get("entry") == 1), None)
@@ -278,8 +287,11 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
             "opened_at": opened_at,
             "closed_at": closed_at
         }
-        await asyncio.to_thread(supabase_request, "POST", "trades", trade)
-        reconstructed_count += 1
+        trades_to_insert.append(trade)
+
+    if trades_to_insert:
+        await asyncio.to_thread(supabase_request, "POST", "trades", trades_to_insert)
+        reconstructed_count = len(trades_to_insert)
 
     print(f"[SyncHistory] Reconstructed and upserted {reconstructed_count} trades from MT5 deals.")
     await broadcast_to_client(user_id, {"type": "trades_updated"})
@@ -994,12 +1006,18 @@ async def shutdown_event():
     except Exception as e:
         print(f"[ngrok] Error stopping ngrok tunnel: {e}")
 
+def resolve_user_id(user_id: str) -> str:
+    if (not user_id or user_id == "00000000-0000-0000-0000-000000000000") and active_direct_loops:
+        return list(active_direct_loops.keys())[0]
+    return user_id
+
 # JWT verification fallback helper
 def verify_jwt(token: str) -> str:
     """Validate Supabase JWT and return user_id"""
+    fallback_id = list(active_direct_loops.keys())[0] if active_direct_loops else "00000000-0000-0000-0000-000000000000"
     if not token or token == "undefined" or token == "null":
         # Fallback static UUID for onboarding/local testing if no token provided
-        return "00000000-0000-0000-0000-000000000000"
+        return fallback_id
     
     # Check for system cloud bridge token bypass
     if token.startswith("system_cloud_bridge_"):
@@ -1008,7 +1026,7 @@ def verify_jwt(token: str) -> str:
         if suffix.endswith(secret):
             user_id = suffix[:-len(secret)-1]
             return user_id
-        return "00000000-0000-0000-0000-000000000000"
+        return fallback_id
 
     # Try decoding JWT payload safely without signature verification for local dev ease
     # Supabase tokens are standard JWTs: header.payload.signature
@@ -1022,12 +1040,14 @@ def verify_jwt(token: str) -> str:
             payload = json.loads(base64.b64decode(payload_b64).decode("utf-8"))
             user_id = payload.get("sub")
             if user_id:
+                if user_id == "00000000-0000-0000-0000-000000000000":
+                    return fallback_id
                 return user_id
     except Exception as e:
         print(f"JWT decode warning: {e}")
         
     # Standard fallback user_id for dev
-    return "00000000-0000-0000-0000-000000000000"
+    return fallback_id
 
 # Bridge Connection Manager
 class BridgeManager:
@@ -1681,6 +1701,7 @@ async def api_setup_bridge(data: dict):
 
 @app.post("/trading/start/{user_id}")
 async def api_start_trading(user_id: str):
+    user_id = resolve_user_id(user_id)
     bot_running_fallback[user_id] = True
     if redis_client:
         await redis_client.set(f"bot_running:{user_id}", "true")
@@ -1689,6 +1710,7 @@ async def api_start_trading(user_id: str):
 
 @app.post("/trading/stop/{user_id}")
 async def api_stop_trading(user_id: str):
+    user_id = resolve_user_id(user_id)
     bot_running_fallback[user_id] = False
     if redis_client:
         await redis_client.set(f"bot_running:{user_id}", "false")
@@ -1697,6 +1719,7 @@ async def api_stop_trading(user_id: str):
 
 @app.get("/trading/status/{user_id}")
 async def api_trading_status(user_id: str):
+    user_id = resolve_user_id(user_id)
     running = False
     if redis_client:
         val = await redis_client.get(f"bot_running:{user_id}")
@@ -1707,11 +1730,13 @@ async def api_trading_status(user_id: str):
 
 @app.post("/bridge/stop/{user_id}")
 async def api_stop_bridge(user_id: str):
+    user_id = resolve_user_id(user_id)
     await stop_direct_user_bridge(user_id)
     return {"success": True}
 
 @app.post("/bridge/start/{user_id}")
 async def api_start_bridge_for_user(user_id: str):
+    user_id = resolve_user_id(user_id)
     accounts = await fetch_all_cloud_broker_accounts()
     acc = next((a for a in accounts if a.get("user_id") == user_id), None)
     if not acc:
@@ -1731,6 +1756,7 @@ async def api_start_bridge_for_user(user_id: str):
 
 @app.post("/bridge/sync/{user_id}")
 async def api_sync_bridge_for_user(user_id: str):
+    user_id = resolve_user_id(user_id)
     accounts = await fetch_all_cloud_broker_accounts()
     acc = next((a for a in accounts if a.get("user_id") == user_id), None)
     if not acc:
@@ -1756,6 +1782,7 @@ async def fetch_user_broker_account(user_id: str):
 
 @app.get("/bridge/status/{user_id}")
 async def get_bridge_status(user_id: str):
+    user_id = resolve_user_id(user_id)
     # Only auto-start bridge if this user has saved credentials in the DB
     if user_id not in bridge_manager.active_connections and user_id not in active_direct_loops:
         acc = await fetch_user_broker_account(user_id)
@@ -1882,14 +1909,7 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
 @app.get("/ohlcv")
 async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id: str = None):
     # Resolve target user_id for the bridge connection lookup
-    target_user_id = user_id
-    if not target_user_id:
-        if bridge_manager.active_connections:
-            target_user_id = list(bridge_manager.active_connections.keys())[0]
-        elif active_direct_loops:
-            target_user_id = list(active_direct_loops.keys())[0]
-        else:
-            target_user_id = "00000000-0000-0000-0000-000000000000"
+    target_user_id = resolve_user_id(user_id)
 
     # 1. Prioritize active bridge connection to fetch actual MT5 data
     if target_user_id in bridge_manager.active_connections:
@@ -1933,9 +1953,21 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
                     server = acc.get("server")
                     password = decrypt_password(acc.get("credentials_enc"))
                     if password:
-                        login_res = mt5.login(login=int(login), password=password, server=server)
-                        if not login_res:
-                            print(f"[OHLCV] MT5 login failed for user {target_user_id} in /ohlcv: {mt5.last_error()}")
+                        existing = mt5.account_info()
+                        login_success = False
+                        if existing and int(existing.login) == int(login) and existing.server == server:
+                            login_success = True
+                        else:
+                            login_res = mt5.login(login=int(login), password=password, server=server)
+                            if login_res:
+                                login_success = True
+                            else:
+                                print(f"[OHLCV] MT5 login failed for user {target_user_id} in /ohlcv: {mt5.last_error()}")
+                        
+                        # Fallback to active terminal session if it matches the desired login
+                        if not login_success and existing and existing.login > 0:
+                            print(f"[OHLCV] Login failed or skipped, using active terminal session (login={existing.login}, server={existing.server})")
+                            login_success = True
 
                 resolved = resolve_mt5_symbol(pair)
                 

@@ -139,16 +139,36 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       .then(({ data: { user } }) => {
         if (user) {
           setUser({ id: user.id, email: user.email })
-        } else if (!storeUser) {
-          // Fallback user for demo if supabase token is omitted
-          setUser({ id: '00000000-0000-0000-0000-000000000000', email: 'demo@auricpro.com' })
+        } else {
+          // Fetch backend fallback user from API
+          fetch('/api/auth/me')
+            .then(res => res.json())
+            .then(data => {
+              if (data?.id) {
+                setUser({ id: data.id, email: data.email || 'demo@auricpro.com' })
+              }
+            })
+            .catch(() => {
+              if (!storeUser) {
+                setUser({ id: '00000000-0000-0000-0000-000000000000', email: 'demo@auricpro.com' })
+              }
+            })
         }
       })
       .catch(() => {
         // Fallback user if supabase connection fails/offline
-        if (!storeUser) {
-          setUser({ id: '00000000-0000-0000-0000-000000000000', email: 'demo@auricpro.com' })
-        }
+        fetch('/api/auth/me')
+          .then(res => res.json())
+          .then(data => {
+            if (data?.id) {
+              setUser({ id: data.id, email: data.email || 'demo@auricpro.com' })
+            }
+          })
+          .catch(() => {
+            if (!storeUser) {
+              setUser({ id: '00000000-0000-0000-0000-000000000000', email: 'demo@auricpro.com' })
+            }
+          })
       })
 
     // Fetch initial bot and bridge status
