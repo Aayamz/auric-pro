@@ -606,6 +606,29 @@ async def startup_event():
     # Auto-start cloud bridges for users in background
     asyncio.create_task(auto_start_bridges())
 
+    # Start ngrok tunnel in the background
+    try:
+        from pyngrok import ngrok
+        ngrok_token = os.getenv("NGROK_AUTHTOKEN")
+        if ngrok_token:
+            ngrok.set_auth_token(ngrok_token)
+        
+        # Connect to port 8000
+        tunnel = ngrok.connect(8000)
+        print(f"\n[ngrok] Public Tunnel URL: {tunnel.public_url}\n")
+    except Exception as e:
+        print(f"[ngrok] Failed to start ngrok tunnel: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("[Shutdown] Cleaning up resources...")
+    try:
+        from pyngrok import ngrok
+        print("[ngrok] Stopping tunnel...")
+        ngrok.kill()
+    except Exception as e:
+        print(f"[ngrok] Error stopping ngrok tunnel: {e}")
+
 # JWT verification fallback helper
 def verify_jwt(token: str) -> str:
     """Validate Supabase JWT and return user_id"""
@@ -808,7 +831,11 @@ async def bridge_endpoint(websocket: WebSocket):
             data["userId"] = user_id
             
             # Cache latest account statistics locally in memory
-            if data.get("type") == "positions":
+            if data.get("type") == "bridge_hello":
+                is_mock_val = data.get("is_mock", False)
+                direct_loop_mock[user_id] = is_mock_val
+                print(f"[Bridge] Received hello from user {user_id}. Bridge is_mock={is_mock_val}")
+            elif data.get("type") == "positions":
                 # Check for closed positions to trigger history sync
                 prev_info = active_accounts.get(user_id, {})
                 prev_tickets = prev_info.get("tickets", set())
@@ -1464,10 +1491,6 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
         else:
             target_user_id = "00000000-0000-0000-0000-000000000000"
 
-    is_mock = direct_loop_mock.get(target_user_id, not MT5_AVAILABLE)
-    if is_mock:
-        return generate_local_mock_ohlcv(pair, tf, bars)
-
     # 1. Prioritize active bridge connection to fetch actual MT5 data
     if target_user_id in bridge_manager.active_connections:
         req_id = str(uuid.uuid4())
@@ -1494,6 +1517,10 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
             print(f"[OHLCV] Error requesting from bridge: {e}")
         finally:
             pending_ohlcv_requests.pop(req_id, None)
+
+    is_mock = direct_loop_mock.get(target_user_id, not MT5_AVAILABLE)
+    if is_mock:
+        return generate_local_mock_ohlcv(pair, tf, bars)
 
     # 2. Otherwise fall back to local MT5 functions if running locally on Windows
     if MT5_AVAILABLE:
