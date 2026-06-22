@@ -1055,23 +1055,39 @@ bridge_manager = BridgeManager()
 # Next.js Client Connection Manager (duplex WebSocket relay when Redis is offline)
 class ClientManager:
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+        self.active_connections: Dict[str, list] = {}  # user_id -> List[WebSocket]
 
     async def connect(self, user_id: str, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections[user_id] = websocket
-        print(f"Client socket relay connected for user: {user_id}")
+        if user_id not in self.active_connections:
+            self.active_connections[user_id] = []
+        self.active_connections[user_id].append(websocket)
+        print(f"Client socket relay connected for user: {user_id} (total={len(self.active_connections[user_id])})")
 
-    def disconnect(self, user_id: str):
+    def disconnect(self, user_id: str, websocket: WebSocket):
         if user_id in self.active_connections:
-            del self.active_connections[user_id]
+            try:
+                self.active_connections[user_id].remove(websocket)
+            except ValueError:
+                pass
+            if not self.active_connections[user_id]:
+                del self.active_connections[user_id]
             print(f"Client socket relay disconnected for user: {user_id}")
 
     async def send_message(self, user_id: str, msg: dict):
-        if user_id in self.active_connections:
-            await self.active_connections[user_id].send_json(msg)
-            return True
-        return False
+        sockets = self.active_connections.get(user_id, [])
+        dead = []
+        for ws in sockets:
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            try:
+                self.active_connections[user_id].remove(ws)
+            except (ValueError, KeyError):
+                pass
+        return len(sockets) - len(dead) > 0
 
 client_manager = ClientManager()
 
@@ -1636,7 +1652,7 @@ async def client_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        client_manager.disconnect(user_id)
+        client_manager.disconnect(user_id, websocket)
 
 @app.post("/bridge/setup")
 async def api_setup_bridge(data: dict):
@@ -1799,19 +1815,23 @@ async def get_bridge_status(user_id: str):
 
 
 def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
-    now_ms = int(time.time() * 1000)
+    now_sec = int(time.time())
     tf_minutes = 15
     if tf == "M1": tf_minutes = 1
     elif tf == "M5": tf_minutes = 5
+    elif tf == "M15": tf_minutes = 15
     elif tf == "H1": tf_minutes = 60
     elif tf == "H4": tf_minutes = 240
-    
-    # Use live price from store if available, otherwise try MT5, otherwise fall back
+    elif tf == "D1": tf_minutes = 1440
+
+    tf_seconds = tf_minutes * 60
+
+    # Use live price as anchor for the most recent bar
     base_price = 0.0
     latest = latest_prices.get(pair)
     if latest:
         base_price = latest.get("bid", 0.0)
-    
+
     if base_price == 0.0 and MT5_AVAILABLE:
         try:
             if mt5.initialize():
@@ -1825,31 +1845,37 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
                         base_price = float(rates[0][4])
         except Exception:
             pass
-    
-    # Ultimate fallback if we truly have no price data
+
     if base_price == 0.0:
-        base_price = 3300.0  # More realistic XAUUSD price than old 1950.0 hardcode
-    
+        base_price = 3300.0
+
+    # Align newest bar to the current completed bar boundary
+    latest_bar_time = (now_sec // tf_seconds) * tf_seconds
+    start_time = latest_bar_time - (bars - 1) * tf_seconds
+
+    # Walk oldest-to-newest: timestamps and OHLCV always aligned — no .reverse() bug
+    current_price = base_price - bars * 2.0
+
     data = []
-    current_price = base_price
-    for i in range(bars - 1, -1, -1):
-        t = now_ms - (bars - 1 - i) * tf_minutes * 60 * 1000
-        c = current_price
-        o = c - random.uniform(-3, 3)
-        h = max(o, c) + random.uniform(0, 1.5)
-        l = min(o, c) - random.uniform(0, 1.5)
-        v = random.randint(100, 5000)
+    for i in range(bars):
+        t = start_time + i * tf_seconds
+        o = current_price
+        change = (0.8 if i > bars * 0.5 else -0.2) + (hash((pair, t)) % 100) / 50.0 - 1.0
+        import math
+        c = round(o + change + math.sin(i * 0.3) * 1.5, 2)
+        h = round(max(o, c) + abs(hash((pair, t, 'h')) % 100) / 80.0, 2)
+        l = round(min(o, c) - abs(hash((pair, t, 'l')) % 100) / 80.0, 2)
+        v = 100 + abs(hash((pair, t, 'v')) % 4900)
         data.append({
-            "time": t // 1000,
+            "time": t,
             "open": round(o, 2),
-            "high": round(h, 2),
-            "low": round(l, 2),
-            "close": round(c, 2),
+            "high": h,
+            "low": l,
+            "close": c,
             "volume": v
         })
-        current_price = o
-        
-    data.reverse()
+        current_price = c
+
     return data
 
 
