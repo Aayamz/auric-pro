@@ -14,14 +14,13 @@ function ScalperContent() {
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
 
+  const { prices, positions, bridgeStatus, theme, user, botRunning, setBotRunning } = useStore()
   const { openTrade, closeTrade } = useLiveData()
-  const { prices, positions, bridgeStatus, theme, user } = useStore()
   const { addToast } = useToast()
 
   const [lots, setLots] = useState(0.01)
   const [slPips, setSlPips] = useState(50)
   const [tpPips, setTpPips] = useState(100)
-  const [aiAuto, setAiAuto] = useState(false)
   const [confirmCloseAll, setConfirmCloseAll] = useState(false)
   const [buyLoading, setBuyLoading] = useState(false)
   const [sellLoading, setSellLoading] = useState(false)
@@ -172,6 +171,33 @@ function ScalperContent() {
   const handleBuy = useCallback(() => executeTrade('BUY'), [executeTrade])
   const handleSell = useCallback(() => executeTrade('SELL'), [executeTrade])
 
+  const handleToggleAuto = useCallback(async () => {
+    const action = botRunning ? 'stop' : 'start'
+    try {
+      const res = await fetch(`/api/trading/${action}`, { method: 'POST' })
+      if (!res.ok) throw new Error('API request failed')
+      const data = await res.json()
+      if (data.success) {
+        setBotRunning(!botRunning)
+        addToast({
+          type: 'success',
+          title: `AI Auto ${action === 'start' ? 'Enabled' : 'Disabled'}`,
+          message: `Algorithmic trading engine has been ${action === 'start' ? 'started' : 'stopped'}.`,
+          duration: 4000
+        })
+      } else {
+        throw new Error(data.error || 'Failed to toggle AI Auto mode')
+      }
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Toggle Failed',
+        message: err.message || 'Could not toggle AI Auto mode.',
+        duration: 5000
+      })
+    }
+  }, [botRunning, setBotRunning, addToast])
+
   const handleCloseAll = () => {
     positions.forEach(p => closeTrade(p.ticket))
     setConfirmCloseAll(false)
@@ -316,11 +342,11 @@ function ScalperContent() {
           <div className="flex items-center justify-between border border-hairline rounded-sm px-sm py-xs bg-canvas">
             <div>
               <span className="font-mono text-[9px] text-mute uppercase block">AI AUTO</span>
-              <span className="font-sans text-caption text-body-text">{aiAuto ? 'Engine Active' : 'Manual Mode'}</span>
+              <span className="font-sans text-caption text-body-text">{botRunning ? 'Engine Active' : 'Manual Mode'}</span>
             </div>
-            <button onClick={() => setAiAuto(!aiAuto)}
-              className={`w-[40px] h-[22px] rounded-full relative transition-colors cursor-pointer ${aiAuto ? 'bg-link' : 'bg-canvas-soft-2 border border-hairline'}`}>
-              <span className={`absolute top-[2px] w-[16px] h-[16px] rounded-full bg-ink transition-all ${aiAuto ? 'left-[21px] bg-white' : 'left-[2px]'}`} />
+            <button onClick={handleToggleAuto}
+              className={`w-[40px] h-[22px] rounded-full relative transition-colors cursor-pointer ${botRunning ? 'bg-link' : 'bg-canvas-soft-2 border border-hairline'}`}>
+              <span className={`absolute top-[2px] w-[16px] h-[16px] rounded-full bg-ink transition-all ${botRunning ? 'left-[21px] bg-white' : 'left-[2px]'}`} />
             </button>
           </div>
 

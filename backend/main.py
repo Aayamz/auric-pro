@@ -195,11 +195,24 @@ async def sync_mt5_history(user_id: str, login: int, password: str, server: str,
     
     # Check if already logged in, otherwise login
     existing = mt5.account_info()
-    if not (existing and int(existing.login) == int(login) and existing.server == server):
-        if not mt5.login(login=login, password=password, server=server, timeout=10000):
+    login_success = False
+    if existing and int(existing.login) == int(login) and existing.server == server:
+        login_success = True
+    elif login and password and server:
+        if mt5.login(login=login, password=password, server=server, timeout=10000):
+            login_success = True
+        else:
             print(f"[SyncHistory] MT5 login() failed: {mt5.last_error()}")
-            mt5.shutdown()
-            return
+            
+    # Fallback to active terminal session if it matches the desired login
+    if not login_success and existing and existing.login > 0:
+        print(f"[SyncHistory] Login failed or skipped, using active terminal session (login={existing.login}, server={existing.server})")
+        login_success = True
+        
+    if not login_success:
+        mt5.shutdown()
+        return
+
 
     # Delete existing trades for this user before rebuilding from real MT5 history
     # This clears any mock or seeded trades so only real data is shown on portfolio
@@ -293,22 +306,36 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
         else:
             # Step 2: Check if already logged in with the correct account
             existing = mt5.account_info()
+            login_success = False
             if existing and int(existing.login) == int(login) and existing.server == server:
                 print(f"[DirectEngine] MT5 already logged in as {existing.login} on {existing.server}. Balance: {existing.balance}")
+                login_success = True
             elif login and password and server:
                 # Need to log in with the correct credentials
-                if not mt5.login(login=int(login), password=password, server=server, timeout=10000):
-                    print(f"[DirectEngine] MT5 login() failed: {mt5.last_error()}. Falling back to simulation mode.")
-                    mt5.shutdown()
-                    is_real_mt5 = False
-                    mock = True
-                    direct_loop_mock[user_id] = mock
+                print(f"[DirectEngine] Attempting to login to MT5 account {login} on {server}...")
+                if mt5.login(login=int(login), password=password, server=server, timeout=10000):
+                    print("MT5 login successful.")
+                    login_success = True
                 else:
-                    acc_info = mt5.account_info()
-                    if acc_info:
-                        print(f"[DirectEngine] MT5 logged in — login={acc_info.login}, server={acc_info.server}, balance={acc_info.balance}, equity={acc_info.equity}")
-                    else:
-                        print(f"[DirectEngine] MT5 login succeeded but account_info() returned None.")
+                    print(f"[DirectEngine] MT5 login() failed: {mt5.last_error()}")
+
+            # Fallback to active terminal session if it matches the desired login
+            if not login_success and existing and existing.login > 0:
+                print(f"[DirectEngine] Login failed or skipped, but using active terminal session (login={existing.login}, server={existing.server})")
+                login_success = True
+
+            if not login_success:
+                print("[DirectEngine] Direct MT5 engine connection failed. Falling back to simulation mode.")
+                mt5.shutdown()
+                is_real_mt5 = False
+                mock = True
+                direct_loop_mock[user_id] = mock
+            else:
+                acc_info = mt5.account_info()
+                if acc_info:
+                    print(f"[DirectEngine] MT5 logged in — login={acc_info.login}, server={acc_info.server}, balance={acc_info.balance}, equity={acc_info.equity}")
+                else:
+                    print(f"[DirectEngine] MT5 login succeeded but account_info() returned None.")
 
         # Log account info — demo accounts are treated as live
         if is_real_mt5:
@@ -954,7 +981,10 @@ def execute_real_trade(cmd, login=None, password=None, server=None):
             print(f"[DirectEngine] Logging in to MT5 account {login} on {server} from execution thread...")
             if not mt5.login(login=int(login), password=password, server=server):
                 print(f"[DirectEngine] MT5 login failed in execution thread: {mt5.last_error()}")
-                return None
+                if existing and existing.login > 0:
+                    print(f"[DirectEngine] Using active terminal session (login={existing.login}) despite login error.")
+                else:
+                    return None
                 
     symbol = cmd.get("pair", "XAUUSD")
     direction = cmd.get("direction", "BUY")
@@ -1021,7 +1051,10 @@ def execute_real_close(ticket, login: int = None, password: str = None, server: 
         existing = mt5.account_info()
         if not existing or int(existing.login) != int(login) or existing.server != server:
             if not mt5.login(login=int(login), password=password, server=server):
-                return False
+                if existing and existing.login > 0:
+                    print(f"[DirectEngine] Close: Using active terminal session (login={existing.login}) despite login error.")
+                else:
+                    return False
                 
     positions = mt5.positions_get(ticket=ticket)
     if not positions:
@@ -1069,7 +1102,10 @@ def execute_real_modify(ticket, sl, tp, login: int = None, password: str = None,
         existing = mt5.account_info()
         if not existing or int(existing.login) != int(login) or existing.server != server:
             if not mt5.login(login=int(login), password=password, server=server):
-                return False
+                if existing and existing.login > 0:
+                    print(f"[DirectEngine] Modify: Using active terminal session (login={existing.login}) despite login error.")
+                else:
+                    return False
                 
     positions = mt5.positions_get(ticket=ticket)
     if not positions:

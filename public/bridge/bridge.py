@@ -32,8 +32,13 @@ try:
 except ImportError:
     PRAY_AVAILABLE = False
 
-CONFIG_FILE = "bridge_config.json"
-DEFAULT_ENCRYPTION_KEY = b"fW8kZ2dUbWRKMWNmU0xYQzh6cDVxZ2M0djhkZ2hqa2w="  # Static fallback key for MVP
+def safe_float(val, default=0.0):
+    try:
+        if val is None or val == "":
+            return default
+        return float(val)
+    except:
+        return default
 
 def get_fernet():
     if not FERNET_AVAILABLE:
@@ -356,7 +361,7 @@ def execute_real_trade(cmd):
     # Prepare trade request
     symbol = cmd.get("pair", "XAUUSD")
     direction = cmd.get("direction", "BUY")
-    lots = cmd.get("lots", 0.01)
+    lots = safe_float(cmd.get("lots"), 0.01)
     
     # Resolve to broker terminal symbol variation
     terminal_symbol = resolve_mt5_symbol(symbol)
@@ -378,8 +383,8 @@ def execute_real_trade(cmd):
         "volume": lots,
         "type": action_type,
         "price": price,
-        "sl": float(cmd["sl"]) if cmd.get("sl") else 0.0,
-        "tp": float(cmd["tp"]) if cmd.get("tp") else 0.0,
+        "sl": safe_float(cmd.get("sl"), 0.0),
+        "tp": safe_float(cmd.get("tp") if cmd.get("tp") is not None else cmd.get("tp1"), 0.0),
         "deviation": 20,
         "magic": 202400,
         "comment": "AURIC Cloud Trade",
@@ -494,8 +499,8 @@ async def command_listener(ws, is_mock):
                         request = {
                             "action": mt5.TRADE_ACTION_SLTP,
                             "position": ticket,
-                            "sl": float(sl) if sl else pos.sl,
-                            "tp": float(tp) if tp else pos.tp
+                            "sl": safe_float(sl, pos.sl),
+                            "tp": safe_float(tp, pos.tp)
                         }
                         result = mt5.order_send(request)
                         print(f"MT5 modify result: {result}")
