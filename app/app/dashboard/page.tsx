@@ -287,12 +287,26 @@ export default function DashboardPage() {
     if (!livePrice || !livePrice.bid) return
     const bid = livePrice.bid
     const bar = lastBarRef.current
-    // Sanity check: reject price ticks that are wildly different from the last bar.
-    // This prevents massive phantom candles when OHLCV data and live prices
-    // come from different sources (e.g. mock OHLCV vs real MT5 tick).
+    // If the live price is far from the last bar, the OHLCV data and live
+    // price tick are from different sources (e.g. stale mock OHLCV vs real MT5 tick).
+    // Reset the bar to the live price so the chart tracks correctly.
+    // The regular 15s OHLCV refetch will bring consistent candles once
+    // the backend's latest_prices dict is populated by the engine loop.
     const barMid = (bar.high + bar.low) / 2
     const deviationPct = barMid > 0 ? Math.abs(bid - barMid) / barMid : 0
-    if (deviationPct > 0.03) return // >3% deviation — skip stale/mismatched tick
+    if (deviationPct > 0.02) {
+      const freshBar = {
+        time: bar.time as Time,
+        open: bid,
+        high: bid,
+        low: bid,
+        close: bid,
+        volume: bar.volume
+      }
+      lastBarRef.current = freshBar
+      try { candleSeriesRef.current.update(freshBar) } catch (e) {}
+      return
+    }
     const updated = {
       time: bar.time as Time,
       open: bar.open,

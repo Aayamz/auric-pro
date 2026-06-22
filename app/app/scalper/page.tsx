@@ -143,11 +143,23 @@ function ScalperContent() {
     if (!livePrice || !livePrice.bid) return
     const liveBid = livePrice.bid
     const bar = lastBarRef.current
-    // Sanity check: reject price ticks that are wildly different from the last bar.
-    // Prevents massive phantom candles when OHLCV and live price sources diverge.
+    // If the live price is far from the last bar, the OHLCV data and live
+    // price tick are from different sources. Reset the bar to the live price.
     const barMid = (bar.high + bar.low) / 2
     const deviationPct = barMid > 0 ? Math.abs(liveBid - barMid) / barMid : 0
-    if (deviationPct > 0.03) return // >3% deviation — skip stale/mismatched tick
+    if (deviationPct > 0.02) {
+      const freshBar = {
+        time: bar.time as Time,
+        open: liveBid,
+        high: liveBid,
+        low: liveBid,
+        close: liveBid,
+        volume: bar.volume
+      }
+      lastBarRef.current = freshBar
+      try { candleSeriesRef.current.update(freshBar) } catch (e) {}
+      return
+    }
     const updated = {
       time: bar.time as Time,
       open: bar.open,

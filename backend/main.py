@@ -2034,7 +2034,10 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
             pending_ohlcv_requests.pop(req_id, None)
 
     is_mock = direct_loop_mock.get(target_user_id, not MT5_AVAILABLE)
-    if is_mock:
+
+    # If the user has an active direct engine loop running with real MT5,
+    # skip mock and go straight to local MT5 fetch below.
+    if is_mock and target_user_id not in active_direct_loops:
         return generate_local_mock_ohlcv(pair, tf, bars)
 
     # 2. Otherwise fall back to local MT5 functions if running locally on Windows
