@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useStore, MTPosition, Signal } from '@/store'
 import { useLiveData } from '@/hooks/useLiveData'
-import { createChart, IChartApi, ISeriesApi, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts'
+import { createChart, IChartApi, ISeriesApi, CandlestickSeries, createSeriesMarkers, Time } from 'lightweight-charts'
 import { Edit2, RefreshCw } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import { getBaseApiUrl } from '@/lib/api-helper'
@@ -45,7 +45,7 @@ export default function DashboardPage() {
 
   const queryClient = useQueryClient()
 
-  const lastBarRef = useRef<{ time: number; open: number; high: number; low: number; close: number; volume: number } | null>(null)
+  const lastBarRef = useRef<{ time: Time; open: number; high: number; low: number; close: number; volume: number } | null>(null)
 
   // Fetch OHLCV data — force-dynamic, no caching
   const { data: ohlcvData, refetch: refetchOhlcv } = useQuery({
@@ -181,7 +181,7 @@ export default function DashboardPage() {
     // Set Candlestick Data and remember last bar for real-time tick updates
     candleSeriesRef.current.setData(ohlcvData)
     if (ohlcvData.length > 0) {
-      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1] }
+      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1], time: ohlcvData[ohlcvData.length - 1].time as Time }
     }
 
     const latestPrice = ohlcvData[ohlcvData.length - 1].close
@@ -288,7 +288,7 @@ export default function DashboardPage() {
     const bid = livePrice.bid
     const bar = lastBarRef.current
     const updated = {
-      time: bar.time,
+      time: bar.time as Time,
       open: bar.open,
       high: Math.max(bar.high, bid),
       low: Math.min(bar.low, bid),

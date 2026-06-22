@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useStore } from '@/store'
 import { useLiveData } from '@/hooks/useLiveData'
 import { ToastProvider, useToast } from '@/components/Toast'
-import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from 'lightweight-charts'
+import { createChart, IChartApi, ISeriesApi, CandlestickSeries, Time } from 'lightweight-charts'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUp, ArrowDown, X, AlertTriangle, Loader2, WifiOff } from 'lucide-react'
 import { getBaseApiUrl } from '@/lib/api-helper'
@@ -13,7 +13,7 @@ function ScalperContent() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const lastBarRef = useRef<{ time: number; open: number; high: number; low: number; close: number; volume: number } | null>(null)
+  const lastBarRef = useRef<{ time: Time; open: number; high: number; low: number; close: number; volume: number } | null>(null)
 
   const { prices, positions, bridgeStatus, theme, user, botRunning, setBotRunning } = useStore()
   const { openTrade, closeTrade } = useLiveData()
@@ -127,7 +127,7 @@ function ScalperContent() {
   useEffect(() => {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
       candleSeriesRef.current.setData(ohlcvData)
-      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1] }
+      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1], time: ohlcvData[ohlcvData.length - 1].time as Time }
     }
   }, [ohlcvData])
 
@@ -139,7 +139,7 @@ function ScalperContent() {
     const liveBid = livePrice.bid
     const bar = lastBarRef.current
     const updated = {
-      time: bar.time,
+      time: bar.time as Time,
       open: bar.open,
       high: Math.max(bar.high, liveBid),
       low: Math.min(bar.low, liveBid),
