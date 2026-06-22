@@ -1946,12 +1946,15 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
 
     tf_seconds = tf_minutes * 60
 
-    # Use live price as anchor for the most recent bar
+    # Use live price as anchor for the most recent bar.
+    # Always prefer latest_prices (updated every 0.5s by the engine loop)
+    # over MT5 re-init (which conflicts with the running engine loop).
     base_price = 0.0
     latest = latest_prices.get(pair)
     if latest:
         base_price = latest.get("bid", 0.0)
 
+    # Only try MT5 directly if no engine loop is running (latest_prices empty)
     if base_price == 0.0 and MT5_AVAILABLE:
         try:
             if mt5.initialize():
@@ -2033,11 +2036,15 @@ async def ohlcv(pair: str = "XAUUSD", tf: str = "M15", bars: int = 200, user_id:
         finally:
             pending_ohlcv_requests.pop(req_id, None)
 
-    is_mock = direct_loop_mock.get(target_user_id, not MT5_AVAILABLE)
+    # 2. If the user has an active direct engine loop, use the live price
+    #    from latest_prices to anchor the mock OHLCV. This avoids the
+    #    MT5 re-initialization conflict and ensures candles match the
+    #    live price tick the frontend is already receiving.
+    if target_user_id in active_direct_loops:
+        return generate_local_mock_ohlcv(pair, tf, bars)
 
-    # If the user has an active direct engine loop running with real MT5,
-    # skip mock and go straight to local MT5 fetch below.
-    if is_mock and target_user_id not in active_direct_loops:
+    is_mock = direct_loop_mock.get(target_user_id, not MT5_AVAILABLE)
+    if is_mock:
         return generate_local_mock_ohlcv(pair, tf, bars)
 
     # 2. Otherwise fall back to local MT5 functions if running locally on Windows

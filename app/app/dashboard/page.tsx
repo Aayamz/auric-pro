@@ -179,21 +179,23 @@ export default function DashboardPage() {
     if (!candleSeriesRef.current || !Array.isArray(ohlcvData) || ohlcvData.length === 0) return
 
     // If the live price is available and very different from the last bar's close,
-    // replace the last bar with the live price BEFORE rendering to prevent a flash
-    // of stale/mock data followed by a sudden jump.
+    // the OHLCV data is stale/mock (anchored at a wrong base price).
+    // Shift ALL candles so they are anchored at the live price instead of
+    // rendering them off-screen at the wrong level.
     let chartData = ohlcvData
     const livePrice = prices[selectedPair]
     if (livePrice?.bid && ohlcvData.length > 0) {
       const lastBar = ohlcvData[ohlcvData.length - 1]
       const deviationPct = lastBar.close > 0 ? Math.abs(livePrice.bid - lastBar.close) / lastBar.close : 0
       if (deviationPct > 0.02) {
-        chartData = [...ohlcvData.slice(0, -1), {
-          ...lastBar,
-          open: livePrice.bid,
-          high: livePrice.bid,
-          low: livePrice.bid,
-          close: livePrice.bid
-        }]
+        const offset = livePrice.bid - lastBar.close
+        chartData = ohlcvData.map(bar => ({
+          ...bar,
+          open: +(bar.open + offset).toFixed(2),
+          high: +(bar.high + offset).toFixed(2),
+          low: +(bar.low + offset).toFixed(2),
+          close: +(bar.close + offset).toFixed(2)
+        }))
       }
     }
 

@@ -131,19 +131,20 @@ function ScalperContent() {
 
   useEffect(() => {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
-      // Correct the last bar to live price before rendering to prevent flash
+      // If live price is far from OHLCV data, shift all candles to the live price
       let chartData = ohlcvData
       if (xauPrice?.bid && ohlcvData.length > 0) {
         const lastBar = ohlcvData[ohlcvData.length - 1]
         const deviationPct = lastBar.close > 0 ? Math.abs(xauPrice.bid - lastBar.close) / lastBar.close : 0
         if (deviationPct > 0.02) {
-          chartData = [...ohlcvData.slice(0, -1), {
-            ...lastBar,
-            open: xauPrice.bid,
-            high: xauPrice.bid,
-            low: xauPrice.bid,
-            close: xauPrice.bid
-          }]
+          const offset = xauPrice.bid - lastBar.close
+          chartData = ohlcvData.map(bar => ({
+            ...bar,
+            open: +(bar.open + offset).toFixed(2),
+            high: +(bar.high + offset).toFixed(2),
+            low: +(bar.low + offset).toFixed(2),
+            close: +(bar.close + offset).toFixed(2)
+          }))
         }
       }
       candleSeriesRef.current.setData(chartData)
