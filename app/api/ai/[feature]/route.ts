@@ -3,7 +3,7 @@ import { createClient } from 'redis'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
-import { getPythonApiUrl } from '@/lib/api-helper'
+import { getPythonApiUrl } from '@/lib/api-helper-server'
 
 async function callGemini(prompt: string, responseJson: boolean = false, maxTokens: number = 300): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY

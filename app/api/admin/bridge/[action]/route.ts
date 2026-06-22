@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
-import { getPythonApiUrl } from '@/lib/api-helper'
+import { getPythonApiUrl } from '@/lib/api-helper-server'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder-url.supabase.co'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'

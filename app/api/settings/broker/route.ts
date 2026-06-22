@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 
-import { getPythonApiUrl } from '@/lib/api-helper'
+import { getPythonApiUrl } from '@/lib/api-helper-server'
 
 export async function GET() {
   const userId = await getCurrentUserId()

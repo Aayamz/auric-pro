@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUserId } from '@/lib/supabase-server'
 
-import { getPythonApiUrl } from '@/lib/api-helper'
+import { getPythonApiUrl } from '@/lib/api-helper-server'
 
 export const dynamic = 'force-dynamic'
 

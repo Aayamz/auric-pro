@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUserId } from '@/lib/supabase-server'
 
-import { getPythonApiUrl } from '@/lib/api-helper'
+import { getPythonApiUrl } from '@/lib/api-helper-server'
 
 // Never cache this route — OHLCV must always be fresh from MT5
 export const dynamic = 'force-dynamic'

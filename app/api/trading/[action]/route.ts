@@ -5,7 +5,7 @@ import { getCurrentUserId } from '@/lib/supabase-server'
 export const dynamic = 'force-dynamic'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
-import { getPythonApiUrl } from '@/lib/api-helper'
+import { getPythonApiUrl } from '@/lib/api-helper-server'
 
 export async function POST(
   request: Request,
