@@ -908,7 +908,7 @@ memory_pubsub = MemoryPubSub()
 async def startup_event():
     global redis_client, redis_mock_server
     try:
-        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True, protocol=2)
         # Ping to test connection
         await redis_client.ping()
         print(f"FastAPI connected to external Redis at {REDIS_URL}")
@@ -930,7 +930,7 @@ async def startup_event():
             await redis_mock_server.start(host='127.0.0.1', port=port)
             
             # Re-attempt connection to our local mock server
-            redis_client = aioredis.from_url(f"redis://127.0.0.1:{port}", decode_responses=True)
+            redis_client = aioredis.from_url(f"redis://127.0.0.1:{port}", decode_responses=True, protocol=2)
             await redis_client.ping()
             print(f"FastAPI connected to built-in Redis Mock Server at redis://127.0.0.1:{port}")
         except Exception as mock_err:
