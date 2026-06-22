@@ -32,8 +32,8 @@ function ScalperContent() {
 
   const isBridgeConnected = bridgeStatus === 'connected'
 
-  // ATR / session mock
-  const atr = 2.4
+  // ATR calculation from OHLCV data (14-period)
+  const [atr, setAtr] = useState<number | null>(null)
   const session = (() => {
     const h = new Date().getUTCHours()
     if (h >= 7 && h < 16) return 'London'
@@ -127,6 +127,27 @@ function ScalperContent() {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
       candleSeriesRef.current.setData(ohlcvData)
     }
+  }, [ohlcvData])
+
+  // Compute ATR(14) from OHLCV whenever data changes
+  useEffect(() => {
+    if (!Array.isArray(ohlcvData) || ohlcvData.length < 2) return
+    const period = 14
+    const trList: number[] = []
+    for (let i = 1; i < ohlcvData.length; i++) {
+      const cur = ohlcvData[i]
+      const prev = ohlcvData[i - 1]
+      const tr = Math.max(
+        cur.high - cur.low,
+        Math.abs(cur.high - prev.close),
+        Math.abs(cur.low - prev.close)
+      )
+      trList.push(tr)
+    }
+    const slice = trList.slice(-period)
+    if (slice.length === 0) return
+    const avg = slice.reduce((s, v) => s + v, 0) / slice.length
+    setAtr(parseFloat(avg.toFixed(2)))
   }, [ohlcvData])
 
   const executeTrade = useCallback(async (direction: 'BUY' | 'SELL') => {
@@ -261,15 +282,11 @@ function ScalperContent() {
           <div className="border-t lg:border-t border-hairline pt-md space-y-xs hidden lg:block">
             <div>
               <span className="font-mono text-[9px] text-mute uppercase block">ATR (14)</span>
-              <span className="font-mono text-body-sm text-body-text">{atr}</span>
+              <span className="font-mono text-body-sm text-body-text">{atr !== null ? atr : '—'}</span>
             </div>
             <div>
               <span className="font-mono text-[9px] text-mute uppercase block">SESSION</span>
               <span className="font-mono text-body-sm text-cyan-deep">{session}</span>
-            </div>
-            <div>
-              <span className="font-mono text-[9px] text-mute uppercase block">AI SIGNAL</span>
-              <span className="font-mono text-caption-mono text-link font-bold">BUY 88.5%</span>
             </div>
           </div>
         </div>

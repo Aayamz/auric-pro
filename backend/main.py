@@ -38,8 +38,11 @@ def load_env_local():
 # Load dotenv immediately so keys are available for initialization
 load_env_local()
 
-DEFAULT_ENCRYPTION_KEY = b"fW8kZ2dUbWRKMWNmU0xYQzh6cDVxZ2M0djhkZ2hqa2w="
-SYSTEM_SECRET = os.getenv("SYSTEM_SECRET", "auric_secret_system_token_2026")
+_DEFAULT_ENC_KEY = os.getenv("ENCRYPTION_KEY_FALLBACK", "fW8kZ2dUbWRKMWNmU0xYQzh6cDVxZ2M0djhkZ2hqa2w=")
+DEFAULT_ENCRYPTION_KEY = _DEFAULT_ENC_KEY.encode() if isinstance(_DEFAULT_ENC_KEY, str) else _DEFAULT_ENC_KEY
+SYSTEM_SECRET = os.getenv("SYSTEM_SECRET", "")
+if not SYSTEM_SECRET:
+    raise RuntimeError("[AURIC] SYSTEM_SECRET env var is not set. Set it in .env.local before starting the server.")
 
 # MT5 Available check
 try:
@@ -51,11 +54,14 @@ except ImportError:
 def get_fernet():
     key = os.getenv("ENCRYPTION_KEY", "")
     if not key:
-        return Fernet(DEFAULT_ENCRYPTION_KEY)
+        try:
+            return Fernet(DEFAULT_ENCRYPTION_KEY if isinstance(DEFAULT_ENCRYPTION_KEY, bytes) else DEFAULT_ENCRYPTION_KEY.encode())
+        except Exception:
+            raise RuntimeError("[AURIC] ENCRYPTION_KEY or ENCRYPTION_KEY_FALLBACK is invalid. Set ENCRYPTION_KEY in .env.local.")
     try:
         return Fernet(key.encode())
-    except:
-        return Fernet(DEFAULT_ENCRYPTION_KEY)
+    except Exception:
+        raise RuntimeError(f"[AURIC] ENCRYPTION_KEY env var is not a valid Fernet key.")
 
 def encrypt_password(plain_pw: str) -> str:
     fernet = get_fernet()
@@ -375,7 +381,14 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
             print(f"[DirectEngine] Subscribed to cmd:{user_id}")
             while True:
                 try:
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
+                    # Use asyncio.wait_for for timeout compatibility across redis-py versions
+                    try:
+                        message = await asyncio.wait_for(
+                            pubsub.get_message(ignore_subscribe_messages=True),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        continue
                     if message and message.get("type") == "message":
                         try:
                             cmd = json.loads(message["data"])
@@ -385,9 +398,6 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    if "TimeoutError" in type(e).__name__:
-                        # Idle timeout from get_message — normal, just continue polling
-                        continue
                     print(f"[DirectEngine] cmd_reader get_message error: {e}")
                     await asyncio.sleep(1.0)
         except asyncio.CancelledError:
@@ -496,7 +506,7 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                         p["profit"] = round(diff * p["volume"] * 100, 2)
                         
                     tot_pnl = sum(p["profit"] for p in mock_pos)
-                    balance = 10000.0
+                    balance = float(os.getenv("MOCK_ACCOUNT_BALANCE", "10000.0"))
                     equity = round(balance + tot_pnl, 2)
                     
                     pos_data = {
@@ -1391,22 +1401,58 @@ def execute_real_trade(cmd, login=None, password=None, server=None):
         
     price = tick.ask if direction == "BUY" else tick.bid
     
+    sl_val = safe_float(cmd.get("sl"), 0.0)
+    tp_val = safe_float(cmd.get("tp") if cmd.get("tp") is not None else cmd.get("tp1"), 0.0)
+    
+    # Validate SL/TP: only include if non-zero and on the correct side of price
+    # to avoid retcode 10014 (invalid stops) from broker
+    def sl_valid(sl, price, direction):
+        if sl == 0.0:
+            return False
+        if direction == "BUY" and sl >= price:
+            print(f"[TradeEngine] SL {sl} >= price {price} for BUY — ignoring SL")
+            return False
+        if direction == "SELL" and sl <= price:
+            print(f"[TradeEngine] SL {sl} <= price {price} for SELL — ignoring SL")
+            return False
+        return True
+    
+    def tp_valid(tp, price, direction):
+        if tp == 0.0:
+            return False
+        if direction == "BUY" and tp <= price:
+            print(f"[TradeEngine] TP {tp} <= price {price} for BUY — ignoring TP")
+            return False
+        if direction == "SELL" and tp >= price:
+            print(f"[TradeEngine] TP {tp} >= price {price} for SELL — ignoring TP")
+            return False
+        return True
+    
+    magic_num = int(os.getenv("MT5_MAGIC_NUMBER", "202400"))
+    deviation_pts = int(os.getenv("MT5_DEVIATION_POINTS", "20"))
+    trade_comment = os.getenv("MT5_TRADE_COMMENT", "AURIC Cloud Trade")
+    
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": terminal_symbol,
         "volume": float(lots),
         "type": action_type,
         "price": price,
-        "sl": safe_float(cmd.get("sl"), 0.0),
-        "tp": safe_float(cmd.get("tp") if cmd.get("tp") is not None else cmd.get("tp1"), 0.0),
-        "deviation": 20,
-        "magic": 202400,
-        "comment": "AURIC Cloud Trade",
+        "deviation": deviation_pts,
+        "magic": magic_num,
+        "comment": trade_comment,
         "type_time": mt5.ORDER_TIME_GTC,
     }
     
+    # Only add SL/TP if valid — avoids retcode 10014 from brokers with strict stop validation
+    if sl_valid(sl_val, price, direction):
+        request["sl"] = sl_val
+    if tp_valid(tp_val, price, direction):
+        request["tp"] = tp_val
+    
+    print(f"[TradeEngine] Sending order: symbol={terminal_symbol}, type={'BUY' if action_type == mt5.ORDER_TYPE_BUY else 'SELL'}, volume={lots}, price={price}, sl={request.get('sl', 'none')}, tp={request.get('tp', 'none')}")
     result = send_order_with_filling_fallback(request)
-    print(f"MT5 final execution result: {result}")
+    print(f"MT5 final execution result: retcode={result.retcode if result else 'None'}, comment={result.comment if result else 'None'}")
     return result
 
 def execute_real_close(ticket, login: int = None, password: str = None, server: str = None):
@@ -1445,6 +1491,10 @@ def execute_real_close(ticket, login: int = None, password: str = None, server: 
         return False
     price = tick.bid if pos.type == 0 else tick.ask
     
+    magic_num = int(os.getenv("MT5_MAGIC_NUMBER", "202400"))
+    deviation_pts = int(os.getenv("MT5_DEVIATION_POINTS", "20"))
+    close_comment = os.getenv("MT5_CLOSE_COMMENT", "AURIC Close Trade")
+    
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
@@ -1452,12 +1502,14 @@ def execute_real_close(ticket, login: int = None, password: str = None, server: 
         "type": action_type,
         "position": ticket,
         "price": price,
-        "deviation": 20,
-        "magic": 202400,
-        "comment": "AURIC Close Trade",
+        "deviation": deviation_pts,
+        "magic": magic_num,
+        "comment": close_comment,
         "type_time": mt5.ORDER_TIME_GTC,
     }
     result = send_order_with_filling_fallback(request)
+    if result:
+        print(f"[CloseEngine] Close result: retcode={result.retcode}, comment={result.comment}")
     return result and result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]
 
 def execute_real_modify(ticket, sl, tp, login: int = None, password: str = None, server: str = None):
@@ -1874,7 +1926,7 @@ def generate_local_mock_ohlcv(pair: str, tf: str, bars: int) -> list:
             pass
 
     if base_price == 0.0:
-        base_price = 3300.0
+        base_price = float(os.getenv("MOCK_XAUUSD_BASE_PRICE", "3300.0"))
 
     # Align newest bar to the current completed bar boundary
     latest_bar_time = (now_sec // tf_seconds) * tf_seconds
@@ -2022,7 +2074,8 @@ async def get_latest_price(pair: str):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Error fetching tick from MT5: {str(e)}")
 
-    return latest_prices.get(pair, {"bid": 1950.0, "ask": 1950.5})
+    fallback_bid = float(os.getenv("MOCK_XAUUSD_BASE_PRICE", "3300.0"))
+    return latest_prices.get(pair, {"bid": fallback_bid, "ask": round(fallback_bid + 0.5, 2)})
 
 @app.post("/signal/generate")
 async def generate_signal(pair: str, tf: str, strategy_name: str, user_id: str):
