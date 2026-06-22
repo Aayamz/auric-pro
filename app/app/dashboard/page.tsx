@@ -1,11 +1,11 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useStore, MTPosition, Signal } from '@/store'
 import { useLiveData } from '@/hooks/useLiveData'
 import { createChart, IChartApi, ISeriesApi, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts'
-import { Edit2 } from 'lucide-react'
+import { Edit2, RefreshCw } from 'lucide-react'
 import { useToast } from '@/components/Toast'
 import { getBaseApiUrl } from '@/lib/api-helper'
 
@@ -41,28 +41,43 @@ export default function DashboardPage() {
   const [targetTicket, setTargetTicket] = useState<number | null>(null)
   const [modifySL, setModifySL] = useState('')
   const [modifyTP, setModifyTP] = useState('')
+  const [chartRefreshing, setChartRefreshing] = useState(false)
 
-  // Fetch OHLCV data using React Query (attempts local direct query first, falls back to Vercel proxy)
+  const queryClient = useQueryClient()
+
+  // Fetch OHLCV data — force-dynamic, no caching
   const { data: ohlcvData, refetch: refetchOhlcv } = useQuery({
     queryKey: ['ohlcv', selectedPair, selectedTimeframe, user?.id],
     queryFn: async () => {
       try {
         const apiBase = getBaseApiUrl()
-        const res = await fetch(`${apiBase}/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200&user_id=${user?.id || ''}`)
+        const res = await fetch(
+          `${apiBase}/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200&user_id=${user?.id || ''}`,
+          { cache: 'no-store' } // Always fetch fresh from MT5
+        )
         if (!res.ok) throw new Error('Failed to fetch from local API')
         return await res.json()
       } catch (err) {
         console.warn('[Dashboard] Local API unreachable. Falling back to Vercel API proxy.', err)
-        const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200&user_id=${user?.id || ''}`)
-        if (!res.ok) {
-          throw new Error('Failed to fetch live market data')
-        }
+        const res = await fetch(
+          `/api/market/ohlcv?pair=${selectedPair}&tf=${selectedTimeframe}&bars=200&user_id=${user?.id || ''}`,
+          { cache: 'no-store' }
+        )
+        if (!res.ok) throw new Error('Failed to fetch live market data')
         return await res.json()
       }
     },
-    refetchInterval: 15000, // Poll every 15s as a fallback
-    staleTime: 5000 // Allow React Query to treat data as stale after 5s so bridge-live invalidation works immediately
+    staleTime: 0, // Always fetch fresh — never serve stale OHLCV
+    refetchInterval: 15000 // Auto-poll every 15s
   })
+
+  // Hard-refresh the chart — invalidates cached OHLCV and forces a new fetch from MT5
+  const handleRefreshChart = useCallback(async () => {
+    setChartRefreshing(true)
+    await queryClient.invalidateQueries({ queryKey: ['ohlcv'] })
+    await refetchOhlcv()
+    setChartRefreshing(false)
+  }, [queryClient, refetchOhlcv])
 
   // Fetch initial active signals
   useEffect(() => {
@@ -415,15 +430,29 @@ export default function DashboardPage() {
             <h4 className="font-sans text-body-md font-semibold text-ink">
               Chart Console — {selectedPair} ({selectedTimeframe})
             </h4>
-            <span className="font-mono text-caption-mono text-mute">
-              {bridgeStatus === 'connected'
-                ? (prices[selectedPair]?.bid
-                    ? `Live: ${selectedPair} ${prices[selectedPair].bid.toFixed(2)}`
-                    : 'MT5 Connected — Awaiting tick')
-                : bridgeStatus === 'connecting'
-                ? 'Connecting to MT5...'
-                : 'Bridge Offline — showing last data'}
-            </span>
+            <div className="flex items-center gap-xs">
+              <span className={`font-mono text-caption-mono ${
+                bridgeStatus === 'connected' ? 'text-success' : 'text-mute'
+              }`}>
+                {bridgeStatus === 'connected'
+                  ? (prices[selectedPair]?.bid
+                      ? `Live: ${prices[selectedPair].bid.toFixed(2)}`
+                      : 'MT5 Live')
+                  : bridgeStatus === 'connecting'
+                  ? 'Connecting...'
+                  : 'Offline'}
+              </span>
+              <button
+                id="dashboard-refresh-chart-btn"
+                onClick={handleRefreshChart}
+                disabled={chartRefreshing}
+                title="Force refresh chart data from MT5"
+                className="flex items-center gap-xxs px-xs py-[3px] border border-hairline rounded-xs bg-canvas hover:bg-canvas-soft text-body-text font-sans text-[10px] transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-[10px] h-[10px] ${chartRefreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
           <div ref={chartContainerRef} className="w-full bg-canvas relative overflow-hidden h-[350px] lg:h-full lg:flex-1" />
         </div>

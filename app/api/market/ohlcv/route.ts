@@ -3,6 +3,9 @@ import { getCurrentUserId } from '@/lib/supabase-server'
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
+// Never cache this route — OHLCV must always be fresh from MT5
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const pair = searchParams.get('pair') || 'XAUUSD'
@@ -15,32 +18,39 @@ export async function GET(request: Request) {
 
   try {
     const res = await fetch(`${PYTHON_API_URL}/ohlcv?pair=${pair}&tf=${tf}&bars=${bars}&user_id=${user_id}`, {
-      next: { revalidate: 10 }, // Cache for 10s
+      cache: 'no-store', // Never use Next.js cached response — always fetch live from MT5
       headers: {
         'ngrok-skip-browser-warning': 'any-value'
       }
     })
-    
+
     if (!res.ok) {
       throw new Error(`FastAPI backend responded with status ${res.status}`)
     }
 
     const data = await res.json()
-    return NextResponse.json(data)
+    // Pass through with strict no-cache headers so the browser never caches this either
+    return NextResponse.json(data, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache'
+      }
+    })
   } catch (err: any) {
-    // Generate mock data fallback when Python API is unreachable (e.g. serverless Vercel deploy)
+    // Generate realistic mock fallback when Python API is unreachable
     console.warn(`[OHLCV API] Backend unreachable at ${PYTHON_API_URL}. Returning mock fallback data.`)
-    
-    const data = []
+
+    const data: any[] = []
     const now = Math.floor(Date.now() / 1000)
-    let tfSeconds = 900 // 15m
+    let tfSeconds = 900 // default: M15
     if (tf === 'M1') tfSeconds = 60
     else if (tf === 'M5') tfSeconds = 300
     else if (tf === 'H1') tfSeconds = 3600
     else if (tf === 'H4') tfSeconds = 14400
     else if (tf === 'D1') tfSeconds = 86400
 
-    let basePrice = 1950.00
+    // Use realistic current market prices — XAUUSD is ~3300, not the old 1950 hardcode
+    let basePrice = 3320.00
     if (pair.includes('EURUSD')) basePrice = 1.0850
     else if (pair.includes('GBPUSD')) basePrice = 1.2650
     else if (pair.includes('USDJPY')) basePrice = 151.50
@@ -54,13 +64,14 @@ export async function GET(request: Request) {
       const high = Math.max(open, close) + Math.random() * (basePrice * 0.001)
       const low = Math.min(open, close) - Math.random() * (basePrice * 0.001)
       const volume = Math.floor(Math.random() * 5000) + 100
+      const decimals = pair.includes('JPY') || pair.includes('XAU') ? 2 : 5
 
       data.push({
         time,
-        open: Number(open.toFixed(pair.includes('JPY') || pair.includes('XAU') ? 2 : 5)),
-        high: Number(high.toFixed(pair.includes('JPY') || pair.includes('XAU') ? 2 : 5)),
-        low: Number(low.toFixed(pair.includes('JPY') || pair.includes('XAU') ? 2 : 5)),
-        close: Number(close.toFixed(pair.includes('JPY') || pair.includes('XAU') ? 2 : 5)),
+        open: Number(open.toFixed(decimals)),
+        high: Number(high.toFixed(decimals)),
+        low: Number(low.toFixed(decimals)),
+        close: Number(close.toFixed(decimals)),
         volume
       })
       currentPrice = open
