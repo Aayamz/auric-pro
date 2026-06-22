@@ -110,12 +110,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [setTheme])
 
   const email = storeUser?.email || ''
-  const isAdmin = email === 'demo@auricpro.com' || 
-                  email === 'admin@auricpro.com' || 
-                  email === 'admin@auric.pro' || 
-                  email === 'aayamsoni@gmail.com' || 
-                  email === 'aayamsss@gmail.com' ||
-                  !!(process.env.NEXT_PUBLIC_ADMIN_EMAIL && email === process.env.NEXT_PUBLIC_ADMIN_EMAIL)
+  const adminEmailsRaw = process.env.NEXT_PUBLIC_ADMIN_EMAILS || process.env.NEXT_PUBLIC_ADMIN_EMAIL || ''
+  const adminEmailList = adminEmailsRaw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+  const isAdmin = email.length > 0 && adminEmailList.includes(email.toLowerCase())
 
   const navList = React.useMemo(() => {
     const list = [...NAV_ITEMS]

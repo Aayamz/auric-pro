@@ -13,6 +13,7 @@ function ScalperContent() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const lastBarRef = useRef<{ time: number; open: number; high: number; low: number; close: number; volume: number } | null>(null)
 
   const { prices, positions, bridgeStatus, theme, user, botRunning, setBotRunning } = useStore()
   const { openTrade, closeTrade } = useLiveData()
@@ -126,8 +127,30 @@ function ScalperContent() {
   useEffect(() => {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
       candleSeriesRef.current.setData(ohlcvData)
+      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1] }
     }
   }, [ohlcvData])
+
+  // Real-time last-bar update from live bid price
+  useEffect(() => {
+    if (!candleSeriesRef.current || !lastBarRef.current) return
+    const livePrice = xauPrice
+    if (!livePrice || !livePrice.bid) return
+    const liveBid = livePrice.bid
+    const bar = lastBarRef.current
+    const updated = {
+      time: bar.time,
+      open: bar.open,
+      high: Math.max(bar.high, liveBid),
+      low: Math.min(bar.low, liveBid),
+      close: liveBid,
+      volume: bar.volume
+    }
+    lastBarRef.current = updated
+    try {
+      candleSeriesRef.current.update(updated)
+    } catch (e) {}
+  }, [xauPrice])
 
   // Compute ATR(14) from OHLCV whenever data changes
   useEffect(() => {

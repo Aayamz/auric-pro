@@ -45,6 +45,8 @@ export default function DashboardPage() {
 
   const queryClient = useQueryClient()
 
+  const lastBarRef = useRef<{ time: number; open: number; high: number; low: number; close: number; volume: number } | null>(null)
+
   // Fetch OHLCV data — force-dynamic, no caching
   const { data: ohlcvData, refetch: refetchOhlcv } = useQuery({
     queryKey: ['ohlcv', selectedPair, selectedTimeframe, user?.id],
@@ -176,8 +178,11 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!candleSeriesRef.current || !Array.isArray(ohlcvData) || ohlcvData.length === 0) return
 
-    // Set Candlestick Data
+    // Set Candlestick Data and remember last bar for real-time tick updates
     candleSeriesRef.current.setData(ohlcvData)
+    if (ohlcvData.length > 0) {
+      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1] }
+    }
 
     const latestPrice = ohlcvData[ohlcvData.length - 1].close
 
@@ -273,6 +278,28 @@ export default function DashboardPage() {
     }
 
   }, [ohlcvData, chartOverlays, positions, selectedPair])
+
+  // Real-time last-bar update from live price ticks
+  // This makes the chart feel live even between OHLCV refetch intervals
+  useEffect(() => {
+    if (!candleSeriesRef.current || !lastBarRef.current) return
+    const livePrice = prices[selectedPair]
+    if (!livePrice || !livePrice.bid) return
+    const bid = livePrice.bid
+    const bar = lastBarRef.current
+    const updated = {
+      time: bar.time,
+      open: bar.open,
+      high: Math.max(bar.high, bid),
+      low: Math.min(bar.low, bid),
+      close: bid,
+      volume: bar.volume
+    }
+    lastBarRef.current = updated
+    try {
+      candleSeriesRef.current.update(updated)
+    } catch (e) {}
+  }, [prices, selectedPair])
 
   // Force refetch on pair/tf change
   useEffect(() => {

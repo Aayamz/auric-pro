@@ -218,8 +218,8 @@ def generate_mock_ohlcv(pair, tf, bars):
 
 # Mock State for non-Windows or Mock verification
 mock_positions = []
-mock_bid = 1950.0
-mock_ask = 1950.5
+mock_bid = float(os.getenv("MOCK_XAUUSD_BASE_PRICE", "3300.0"))
+mock_ask = round(mock_bid + 0.5, 2)
 
 async def mock_price_stream(ws):
     global mock_bid, mock_ask
@@ -339,22 +339,45 @@ async def real_position_stream(ws):
 def send_order_with_filling_fallback(request):
     if not MT5_AVAILABLE:
         return None
-    # Try different filling modes because brokers have strict requirements (FOK, IOC, RETURN)
-    filling_modes = [
-        mt5.ORDER_FILLING_FOK,
-        mt5.ORDER_FILLING_IOC,
-        mt5.ORDER_FILLING_RETURN
-    ]
+    
+    symbol = request.get("symbol", "")
+    
+    # Read the broker-supported filling modes from symbol_info().filling_mode bitmask
+    # Bit 0 = FOK, Bit 1 = IOC, Bit 2 = RETURN
+    # Only try modes the broker actually supports to avoid retcode 10030
+    supported_modes = []
+    if symbol:
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info is not None:
+            fm = getattr(sym_info, 'filling_mode', 7)  # 7 = all modes fallback
+            if fm & 1:  # FOK
+                supported_modes.append(mt5.ORDER_FILLING_FOK)
+            if fm & 2:  # IOC
+                supported_modes.append(mt5.ORDER_FILLING_IOC)
+            if fm & 4:  # RETURN
+                supported_modes.append(mt5.ORDER_FILLING_RETURN)
+            print(f"[FillMode] Symbol {symbol} filling_mode bitmask={fm}, trying modes: {supported_modes}")
+    
+    # Fall back to trying all three if we couldn't read symbol info
+    if not supported_modes:
+        print(f"[FillMode] Could not read symbol filling_mode, trying all modes")
+        supported_modes = [
+            mt5.ORDER_FILLING_FOK,
+            mt5.ORDER_FILLING_IOC,
+            mt5.ORDER_FILLING_RETURN
+        ]
+    
     last_result = None
-    for fill_mode in filling_modes:
+    for fill_mode in supported_modes:
         request["type_filling"] = fill_mode
         last_result = mt5.order_send(request)
         if last_result and last_result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]:
-            print(f"MT5 Order executed successfully with filling mode: {fill_mode}")
+            print(f"[FillMode] Order executed with filling mode: {fill_mode}")
             return last_result
         else:
             ret_code = last_result.retcode if last_result else 'Unknown'
-            print(f"MT5 Order failed with filling mode {fill_mode}: retcode={ret_code}")
+            comment = last_result.comment if last_result else 'None'
+            print(f"[FillMode] Failed with filling mode {fill_mode}: retcode={ret_code} comment={comment}")
     return last_result
 
 def execute_real_trade(cmd):
@@ -375,24 +398,45 @@ def execute_real_trade(cmd):
         return None
         
     action_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
-    price = mt5.symbol_info_tick(terminal_symbol).ask if direction == "BUY" else mt5.symbol_info_tick(terminal_symbol).bid
+    tick = mt5.symbol_info_tick(terminal_symbol)
+    if not tick:
+        print(f"Error: Could not get tick for {terminal_symbol}")
+        return None
+    price = tick.ask if direction == "BUY" else tick.bid
     
-    request = {
+    sl_val = safe_float(cmd.get("sl"), 0.0)
+    tp_val = safe_float(cmd.get("tp") if cmd.get("tp") is not None else cmd.get("tp1"), 0.0)
+    
+    # Only include SL/TP if non-zero and on valid side of price (avoids retcode 10014)
+    request: dict = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": terminal_symbol,
         "volume": lots,
         "type": action_type,
         "price": price,
-        "sl": safe_float(cmd.get("sl"), 0.0),
-        "tp": safe_float(cmd.get("tp") if cmd.get("tp") is not None else cmd.get("tp1"), 0.0),
-        "deviation": 20,
-        "magic": 202400,
-        "comment": "AURIC Cloud Trade",
+        "deviation": int(os.getenv("MT5_DEVIATION_POINTS", "20")),
+        "magic": int(os.getenv("MT5_MAGIC_NUMBER", "202400")),
+        "comment": os.getenv("MT5_TRADE_COMMENT", "AURIC Cloud Trade"),
         "type_time": mt5.ORDER_TIME_GTC,
     }
+    if sl_val > 0.0:
+        if direction == "BUY" and sl_val < price:
+            request["sl"] = sl_val
+        elif direction == "SELL" and sl_val > price:
+            request["sl"] = sl_val
+        else:
+            print(f"[bridge] SL {sl_val} is on wrong side of price {price} for {direction} — omitting SL")
+    if tp_val > 0.0:
+        if direction == "BUY" and tp_val > price:
+            request["tp"] = tp_val
+        elif direction == "SELL" and tp_val < price:
+            request["tp"] = tp_val
+        else:
+            print(f"[bridge] TP {tp_val} is on wrong side of price {price} for {direction} — omitting TP")
     
+    print(f"[bridge] Sending order: {terminal_symbol} {direction} {lots}L price={price} sl={request.get('sl','none')} tp={request.get('tp','none')}")
     result = send_order_with_filling_fallback(request)
-    print(f"MT5 final execution result: {result}")
+    print(f"[bridge] MT5 result: retcode={result.retcode if result else 'None'} comment={result.comment if result else 'None'}")
     return result
 
 async def command_listener(ws, is_mock):
@@ -459,9 +503,9 @@ async def command_listener(ws, is_mock):
                             "type": action_type,
                             "position": ticket,
                             "price": price,
-                            "deviation": 20,
-                            "magic": 202400,
-                            "comment": "AURIC Close Trade",
+                            "deviation": int(os.getenv("MT5_DEVIATION_POINTS", "20")),
+                            "magic": int(os.getenv("MT5_MAGIC_NUMBER", "202400")),
+                            "comment": os.getenv("MT5_CLOSE_COMMENT", "AURIC Close Trade"),
                             "type_time": mt5.ORDER_TIME_GTC,
                         }
                         result = send_order_with_filling_fallback(request)

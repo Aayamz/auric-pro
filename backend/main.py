@@ -388,8 +388,13 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                             timeout=5.0
                         )
                     except asyncio.TimeoutError:
+                        await asyncio.sleep(0.05)
                         continue
-                    if message and message.get("type") == "message":
+                    if message is None:
+                        # No message yet — short sleep to avoid tight busy loop
+                        await asyncio.sleep(0.05)
+                        continue
+                    if message.get("type") == "message":
                         try:
                             cmd = json.loads(message["data"])
                             await execute_direct_command(user_id, cmd, mock)
@@ -1324,21 +1329,45 @@ async def bridge_endpoint(websocket: WebSocket):
 def send_order_with_filling_fallback(request):
     if not MT5_AVAILABLE:
         return None
-    filling_modes = [
-        mt5.ORDER_FILLING_FOK,
-        mt5.ORDER_FILLING_IOC,
-        mt5.ORDER_FILLING_RETURN
-    ]
+    
+    symbol = request.get("symbol", "")
+    
+    # Read the broker-supported filling modes from symbol_info().filling_mode bitmask
+    # Bit 0 = FOK, Bit 1 = IOC, Bit 2 = RETURN
+    # Only try modes the broker actually supports to avoid retcode 10030
+    supported_modes = []
+    if symbol:
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info is not None:
+            fm = getattr(sym_info, 'filling_mode', 7)  # 7 = all modes fallback
+            if fm & 1:  # FOK
+                supported_modes.append(mt5.ORDER_FILLING_FOK)
+            if fm & 2:  # IOC
+                supported_modes.append(mt5.ORDER_FILLING_IOC)
+            if fm & 4:  # RETURN
+                supported_modes.append(mt5.ORDER_FILLING_RETURN)
+            print(f"[FillMode] Symbol {symbol} filling_mode bitmask={fm}, trying modes: {supported_modes}")
+    
+    # Fall back to trying all three modes if we couldn't read symbol info
+    if not supported_modes:
+        print(f"[FillMode] Could not read symbol filling_mode, trying all modes")
+        supported_modes = [
+            mt5.ORDER_FILLING_FOK,
+            mt5.ORDER_FILLING_IOC,
+            mt5.ORDER_FILLING_RETURN
+        ]
+    
     last_result = None
-    for fill_mode in filling_modes:
+    for fill_mode in supported_modes:
         request["type_filling"] = fill_mode
         last_result = mt5.order_send(request)
         if last_result and last_result.retcode in [mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED]:
-            print(f"MT5 Order executed successfully with filling mode: {fill_mode}")
+            print(f"[FillMode] Order executed with filling mode: {fill_mode}")
             return last_result
         else:
             ret_code = last_result.retcode if last_result else 'Unknown'
-            print(f"MT5 Order failed with filling mode {fill_mode}: retcode={ret_code}")
+            comment = last_result.comment if last_result else 'None'
+            print(f"[FillMode] Failed with filling mode {fill_mode}: retcode={ret_code} comment={comment}")
     return last_result
 
 
