@@ -178,13 +178,32 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!candleSeriesRef.current || !Array.isArray(ohlcvData) || ohlcvData.length === 0) return
 
-    // Set Candlestick Data and remember last bar for real-time tick updates
-    candleSeriesRef.current.setData(ohlcvData)
-    if (ohlcvData.length > 0) {
-      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1], time: ohlcvData[ohlcvData.length - 1].time as Time }
+    // If the live price is available and very different from the last bar's close,
+    // replace the last bar with the live price BEFORE rendering to prevent a flash
+    // of stale/mock data followed by a sudden jump.
+    let chartData = ohlcvData
+    const livePrice = prices[selectedPair]
+    if (livePrice?.bid && ohlcvData.length > 0) {
+      const lastBar = ohlcvData[ohlcvData.length - 1]
+      const deviationPct = lastBar.close > 0 ? Math.abs(livePrice.bid - lastBar.close) / lastBar.close : 0
+      if (deviationPct > 0.02) {
+        chartData = [...ohlcvData.slice(0, -1), {
+          ...lastBar,
+          open: livePrice.bid,
+          high: livePrice.bid,
+          low: livePrice.bid,
+          close: livePrice.bid
+        }]
+      }
     }
 
-    const latestPrice = ohlcvData[ohlcvData.length - 1].close
+    // Set Candlestick Data and remember last bar for real-time tick updates
+    candleSeriesRef.current.setData(chartData)
+    if (chartData.length > 0) {
+      lastBarRef.current = { ...chartData[chartData.length - 1], time: chartData[chartData.length - 1].time as Time }
+    }
+
+    const latestPrice = chartData[chartData.length - 1].close
 
     // Find the first active position matching the selected pair for real SL/TP
     const activePos = positions.find(p =>
@@ -277,7 +296,7 @@ export default function DashboardPage() {
       markersRef.current.setMarkers(markers)
     }
 
-  }, [ohlcvData, chartOverlays, positions, selectedPair])
+  }, [ohlcvData, chartOverlays, positions, selectedPair, prices])
 
   // Real-time last-bar update from live price ticks
   // This makes the chart feel live even between OHLCV refetch intervals

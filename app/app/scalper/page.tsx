@@ -131,10 +131,25 @@ function ScalperContent() {
 
   useEffect(() => {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
-      candleSeriesRef.current.setData(ohlcvData)
-      lastBarRef.current = { ...ohlcvData[ohlcvData.length - 1], time: ohlcvData[ohlcvData.length - 1].time as Time }
+      // Correct the last bar to live price before rendering to prevent flash
+      let chartData = ohlcvData
+      if (xauPrice?.bid && ohlcvData.length > 0) {
+        const lastBar = ohlcvData[ohlcvData.length - 1]
+        const deviationPct = lastBar.close > 0 ? Math.abs(xauPrice.bid - lastBar.close) / lastBar.close : 0
+        if (deviationPct > 0.02) {
+          chartData = [...ohlcvData.slice(0, -1), {
+            ...lastBar,
+            open: xauPrice.bid,
+            high: xauPrice.bid,
+            low: xauPrice.bid,
+            close: xauPrice.bid
+          }]
+        }
+      }
+      candleSeriesRef.current.setData(chartData)
+      lastBarRef.current = { ...chartData[chartData.length - 1], time: chartData[chartData.length - 1].time as Time }
     }
-  }, [ohlcvData])
+  }, [ohlcvData, xauPrice])
 
   // Real-time last-bar update from live bid price
   useEffect(() => {
