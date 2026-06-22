@@ -30,6 +30,22 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# dev logs
+dev-server.log
+*.log
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# one-off debug/patch scripts (do not commit)
+check_*.py
+test_*.py
+fix_*.py
+verify_*.py
+query_db.py
+
 # env files (can opt-in for committing if needed)
 .env*
 
