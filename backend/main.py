@@ -356,31 +356,39 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
         if not redis_client:
             return
         print(f"[DirectEngine] Starting cmd_reader loop for cmd:{user_id}...")
-        while True:
-            pubsub = None
-            try:
-                pubsub = redis_client.pubsub()
-                await pubsub.subscribe(f"cmd:{user_id}")
-                print(f"[DirectEngine] Subscribed to cmd:{user_id}")
-                async for message in pubsub.listen():
+        pubsub = None
+        try:
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe(f"cmd:{user_id}")
+            print(f"[DirectEngine] Subscribed to cmd:{user_id}")
+            while True:
+                try:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
                     if message and message.get("type") == "message":
                         try:
                             cmd = json.loads(message["data"])
                             await execute_direct_command(user_id, cmd, mock)
                         except Exception as e:
                             print(f"[DirectEngine] Error executing command: {e}")
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                print(f"[DirectEngine] cmd_reader error: {e}. Retrying subscription in 2s...")
-                await asyncio.sleep(2.0)
-            finally:
-                if pubsub:
-                    try:
-                        await pubsub.unsubscribe()
-                        await pubsub.close()
-                    except Exception as close_err:
-                        print(f"[DirectEngine] Error closing pubsub: {close_err}")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    if "TimeoutError" in type(e).__name__:
+                        # Idle timeout from get_message — normal, just continue polling
+                        continue
+                    print(f"[DirectEngine] cmd_reader get_message error: {e}")
+                    await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[DirectEngine] cmd_reader subscription error: {e}")
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe()
+                    await pubsub.close()
+                except Exception as close_err:
+                    print(f"[DirectEngine] Error closing pubsub: {close_err}")
 
     cmd_task = asyncio.create_task(cmd_reader())
     # ────────────────────────────────────────────────────────────────────────
@@ -594,8 +602,274 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Built-in Redis-Compatible Mock Server (RESP/RESP3) ---
+async def _read_redis_command(reader):
+    try:
+        line = await reader.readline()
+        if not line:
+            return None
+        if line[0] == ord('*'):
+            try:
+                num_args = int(line[1:-2])
+            except ValueError:
+                return None
+            args = []
+            for _ in range(num_args):
+                arg_line = await reader.readline()
+                if not arg_line or arg_line[0] != ord('$'):
+                    return None
+                try:
+                    arg_len = int(arg_line[1:-2])
+                except ValueError:
+                    return None
+                data = await reader.readexactly(arg_len)
+                await reader.readexactly(2) # read \r\n
+                args.append(data.decode('utf-8'))
+            return args
+        else:
+            return line.decode('utf-8').strip().split()
+    except Exception:
+        return None
+
+def _to_redis_resp(val):
+    if val is None:
+        return b"$-1\r\n"
+    if isinstance(val, bool):
+        return b":1\r\n" if val else b":0\r\n"
+    if isinstance(val, int):
+        return f":{val}\r\n".encode()
+    if isinstance(val, str):
+        encoded = val.encode('utf-8')
+        return f"${len(encoded)}\r\n".encode() + encoded + b"\r\n"
+    if isinstance(val, bytes):
+        return f"${len(val)}\r\n".encode() + val + b"\r\n"
+    if isinstance(val, list):
+        res = f"*{len(val)}\r\n".encode()
+        for item in val:
+            res += _to_redis_resp(item)
+        return res
+    if isinstance(val, dict):
+        res = f"%{len(val)}\r\n".encode()
+        for k, v in val.items():
+            res += _to_redis_resp(k) + _to_redis_resp(v)
+        return res
+    return f"+{str(val)}\r\n".encode()
+
+class RedisMockConnectionHandler:
+    def __init__(self, server, reader, writer):
+        self.server = server
+        self.reader = reader
+        self.writer = writer
+        self.subscribed_channels = set()
+        self.write_lock = asyncio.Lock()
+        self.proto = 2
+
+    async def send(self, data):
+        async with self.write_lock:
+            try:
+                self.writer.write(data)
+                await self.writer.drain()
+            except Exception:
+                pass
+
+    async def send_push(self, array_data):
+        if self.proto == 3:
+            res = f">{len(array_data)}\r\n".encode()
+            for item in array_data:
+                res += _to_redis_resp(item)
+            await self.send(res)
+        else:
+            await self.send(_to_redis_resp(array_data))
+
+    async def run(self):
+        try:
+            while True:
+                cmd_args = await _read_redis_command(self.reader)
+                if cmd_args is None:
+                    break
+                if not cmd_args:
+                    continue
+                
+                cmd = cmd_args[0].upper()
+                if cmd == "PING":
+                    if len(cmd_args) > 1:
+                        await self.send(_to_redis_resp(cmd_args[1]))
+                    else:
+                        await self.send(b"+PONG\r\n")
+                elif cmd == "HELLO":
+                    proto = 2
+                    if len(cmd_args) > 1:
+                        try:
+                            proto = int(cmd_args[1])
+                        except ValueError:
+                            pass
+                    self.proto = proto
+                    if proto == 3:
+                        hello_map = {
+                            "server": "redis-mock",
+                            "version": "6.0.0",
+                            "proto": 3,
+                            "id": 1,
+                            "mode": "standalone",
+                            "role": "master",
+                            "modules": []
+                        }
+                        await self.send(_to_redis_resp(hello_map))
+                    else:
+                        hello_arr = [
+                            "server", "redis-mock",
+                            "version", "6.0.0",
+                            "proto", 2,
+                            "id", 1,
+                            "mode", "standalone",
+                            "role", "master"
+                        ]
+                        await self.send(_to_redis_resp(hello_arr))
+                elif cmd == "CLIENT":
+                    await self.send(b"+OK\r\n")
+                elif cmd == "GET":
+                    if len(cmd_args) < 2:
+                        await self.send(b"-ERR wrong number of arguments for 'get' command\r\n")
+                        continue
+                    key = cmd_args[1]
+                    val = self.get_key(key)
+                    await self.send(_to_redis_resp(val))
+                elif cmd == "SET":
+                    if len(cmd_args) < 3:
+                        await self.send(b"-ERR wrong number of arguments for 'set' command\r\n")
+                        continue
+                    key, val = cmd_args[1], cmd_args[2]
+                    expiry = None
+                    if len(cmd_args) >= 5 and cmd_args[3].upper() == "EX":
+                        try:
+                            expiry = time.time() + float(cmd_args[4])
+                        except ValueError:
+                            pass
+                    self.server.db[key] = (val, expiry)
+                    await self.send(b"+OK\r\n")
+                elif cmd == "SETEX":
+                    if len(cmd_args) < 4:
+                        await self.send(b"-ERR wrong number of arguments for 'setex' command\r\n")
+                        continue
+                    key, seconds, val = cmd_args[1], cmd_args[2], cmd_args[3]
+                    try:
+                        expiry = time.time() + float(seconds)
+                    except ValueError:
+                        expiry = None
+                    self.server.db[key] = (val, expiry)
+                    await self.send(b"+OK\r\n")
+                elif cmd == "DEL":
+                    if len(cmd_args) < 2:
+                        await self.send(b"-ERR wrong number of arguments for 'del' command\r\n")
+                        continue
+                    deleted = 0
+                    for key in cmd_args[1:]:
+                        if key in self.server.db:
+                            del self.server.db[key]
+                            deleted += 1
+                    await self.send(_to_redis_resp(deleted))
+                elif cmd == "EXISTS":
+                    if len(cmd_args) < 2:
+                        await self.send(b"-ERR wrong number of arguments for 'exists' command\r\n")
+                        continue
+                    exists = 0
+                    for key in cmd_args[1:]:
+                        if self.get_key(key) is not None:
+                            exists = 1
+                    await self.send(_to_redis_resp(exists))
+                elif cmd == "PUBLISH":
+                    if len(cmd_args) < 3:
+                        await self.send(b"-ERR wrong number of arguments for 'publish' command\r\n")
+                        continue
+                    channel, msg = cmd_args[1], cmd_args[2]
+                    count = await self.server.publish(channel, msg)
+                    await self.send(_to_redis_resp(count))
+                elif cmd == "SUBSCRIBE":
+                    if len(cmd_args) < 2:
+                        await self.send(b"-ERR wrong number of arguments for 'subscribe' command\r\n")
+                        continue
+                    for channel in cmd_args[1:]:
+                        self.subscribed_channels.add(channel)
+                        if channel not in self.server.subscribers:
+                            self.server.subscribers[channel] = set()
+                        self.server.subscribers[channel].add(self)
+                        sub_count = len(self.subscribed_channels)
+                        await self.send_push(["subscribe", channel, sub_count])
+                elif cmd == "UNSUBSCRIBE":
+                    channels = cmd_args[1:] if len(cmd_args) > 1 else list(self.subscribed_channels)
+                    for channel in channels:
+                        if channel in self.subscribed_channels:
+                            self.subscribed_channels.remove(channel)
+                        if channel in self.server.subscribers:
+                            self.server.subscribers[channel].discard(self)
+                            if not self.server.subscribers[channel]:
+                                del self.server.subscribers[channel]
+                        sub_count = len(self.subscribed_channels)
+                        await self.send_push(["unsubscribe", channel, sub_count])
+                elif cmd == "QUIT":
+                    await self.send(b"+OK\r\n")
+                    break
+                else:
+                    await self.send(f"-ERR unknown command '{cmd}'\r\n".encode())
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[RedisMock] Client connection error: {e}")
+        finally:
+            for channel in list(self.subscribed_channels):
+                if channel in self.server.subscribers:
+                    self.server.subscribers[channel].discard(self)
+                    if not self.server.subscribers[channel]:
+                        del self.server.subscribers[channel]
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+
+    def get_key(self, key):
+        if key in self.server.db:
+            val, expiry = self.server.db[key]
+            if expiry is not None and time.time() > expiry:
+                del self.server.db[key]
+                return None
+            return val
+        return None
+
+class RedisMockServer:
+    def __init__(self):
+        self.db = {}
+        self.subscribers = {}
+        self.server = None
+
+    async def start(self, host='127.0.0.1', port=6379):
+        self.server = await asyncio.start_server(self.handle_client, host, port)
+        print(f"Local Redis Mock Server listening on {host}:{port}")
+
+    async def stop(self):
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
+
+    async def handle_client(self, reader, writer):
+        handler = RedisMockConnectionHandler(self, reader, writer)
+        await handler.run()
+
+    async def publish(self, channel, message):
+        count = 0
+        if channel in self.subscribers:
+            for sub in list(self.subscribers[channel]):
+                try:
+                    await sub.send_push(["message", channel, message])
+                    count += 1
+                except Exception:
+                    pass
+        return count
+
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 redis_client = None
+redis_mock_server = None
 
 # Global memory fallback for pub/sub if Redis is offline
 class MemoryPubSub:
@@ -620,15 +894,36 @@ memory_pubsub = MemoryPubSub()
 
 @app.on_event("startup")
 async def startup_event():
-    global redis_client
+    global redis_client, redis_mock_server
     try:
         redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
         # Ping to test connection
         await redis_client.ping()
-        print(f"FastAPI connected to Redis at {REDIS_URL}")
+        print(f"FastAPI connected to external Redis at {REDIS_URL}")
     except Exception as e:
-        print(f"Redis not available in FastAPI: {e}. Running with memory fallback.")
-        redis_client = None
+        print(f"External Redis not available: {e}. Starting built-in Redis Mock Server...")
+        try:
+            port = 6379
+            try:
+                clean_url = REDIS_URL.split("://")[-1]
+                if "@" in clean_url:
+                    clean_url = clean_url.split("@")[-1]
+                parts = clean_url.split("/")[0].split(":")
+                if len(parts) == 2:
+                    port = int(parts[1])
+            except Exception:
+                pass
+
+            redis_mock_server = RedisMockServer()
+            await redis_mock_server.start(host='127.0.0.1', port=port)
+            
+            # Re-attempt connection to our local mock server
+            redis_client = aioredis.from_url(f"redis://127.0.0.1:{port}", decode_responses=True)
+            await redis_client.ping()
+            print(f"FastAPI connected to built-in Redis Mock Server at redis://127.0.0.1:{port}")
+        except Exception as mock_err:
+            print(f"Failed to start built-in Redis Mock Server: {mock_err}. Running with memory fallback.")
+            redis_client = None
 
     # Auto-start cloud bridges for users in background
     asyncio.create_task(auto_start_bridges())
@@ -684,7 +979,14 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global redis_mock_server
     print("[Shutdown] Cleaning up resources...")
+    if redis_mock_server:
+        try:
+            print("[Shutdown] Stopping built-in Redis Mock Server...")
+            await redis_mock_server.stop()
+        except Exception as se:
+            print(f"[Shutdown] Error stopping Redis Mock Server: {se}")
     try:
         from pyngrok import ngrok
         print("[ngrok] Stopping tunnel...")
