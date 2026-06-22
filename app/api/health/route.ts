@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from 'redis'
-import { getSupabaseServerClient } from '@/lib/supabase-server'
+import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,10 +47,11 @@ export async function GET() {
 
   // 3. Check Python Backend API
   try {
-    const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+    const userId = await getCurrentUserId()
+    const pythonApiUrl = await getPythonApiUrl(userId || undefined)
     const controller = new AbortController()
     const id = setTimeout(() => controller.abort(), 2000)
-    const res = await fetch(`${PYTHON_API_URL}/regime`, { 
+    const res = await fetch(`${pythonApiUrl}/regime`, { 
       signal: controller.signal,
       headers: {
         'ngrok-skip-browser-warning': 'any-value'

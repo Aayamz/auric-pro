@@ -634,17 +634,53 @@ async def startup_event():
     asyncio.create_task(auto_start_bridges())
 
     # Start ngrok tunnel in the background
+    tunnel_url = None
     try:
         from pyngrok import ngrok
-        ngrok_token = os.getenv("NGROK_AUTHTOKEN")
-        if ngrok_token:
-            ngrok.set_auth_token(ngrok_token)
         
-        # Connect to port 8000
-        tunnel = ngrok.connect(8000)
-        print(f"\n[ngrok] Public Tunnel URL: {tunnel.public_url}\n")
+        # Check if there are existing tunnels
+        tunnels = ngrok.get_tunnels()
+        if tunnels:
+            tunnel_url = tunnels[0].public_url
+            print(f"\n[ngrok] Found existing Public Tunnel URL: {tunnel_url}\n")
+        else:
+            ngrok_token = os.getenv("NGROK_AUTHTOKEN")
+            if ngrok_token:
+                ngrok.set_auth_token(ngrok_token)
+            
+            # Connect to port 8000
+            tunnel = ngrok.connect(8000)
+            tunnel_url = tunnel.public_url
+            print(f"\n[ngrok] Public Tunnel URL: {tunnel_url}\n")
     except Exception as e:
         print(f"[ngrok] Failed to start ngrok tunnel: {e}")
+        # Try local ngrok API fallback
+        try:
+            with urllib.request.urlopen("http://localhost:4040/api/tunnels", timeout=2) as response:
+                t_data = json.loads(response.read().decode("utf-8"))
+                for t in t_data.get("tunnels", []):
+                    if t.get("proto") in ["http", "https"]:
+                        tunnel_url = t.get("public_url")
+                        print(f"[ngrok] Recovered tunnel URL from local API: {tunnel_url}")
+                        break
+        except Exception as api_err:
+            print(f"[ngrok] Local API fallback query failed: {api_err}")
+
+    if tunnel_url and redis_client:
+        try:
+            # Save a general/default key
+            await redis_client.set("bridge:url:default", tunnel_url)
+            print(f"[ngrok] Saved default tunnel URL to Redis: {tunnel_url}")
+            
+            # Save for all active broker accounts in Supabase
+            accounts = await fetch_all_cloud_broker_accounts()
+            for acc in accounts:
+                user_id = acc.get("user_id")
+                if user_id:
+                    await redis_client.set(f"bridge:url:{user_id}", tunnel_url)
+                    print(f"[ngrok] Saved tunnel URL to Redis for user {user_id}: {tunnel_url}")
+        except Exception as re:
+            print(f"[ngrok] Failed to write tunnel URL to Redis: {re}")
 
 @app.on_event("shutdown")
 async def shutdown_event():

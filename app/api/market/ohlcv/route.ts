@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUserId } from '@/lib/supabase-server'
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 // Never cache this route — OHLCV must always be fresh from MT5
 export const dynamic = 'force-dynamic'
@@ -16,8 +16,10 @@ export async function GET(request: Request) {
   const sessionUserId = await getCurrentUserId()
   const user_id = searchParams.get('user_id') || sessionUserId || ''
 
+  let pythonApiUrl = ''
   try {
-    const res = await fetch(`${PYTHON_API_URL}/ohlcv?pair=${pair}&tf=${tf}&bars=${bars}&user_id=${user_id}`, {
+    pythonApiUrl = await getPythonApiUrl(user_id)
+    const res = await fetch(`${pythonApiUrl}/ohlcv?pair=${pair}&tf=${tf}&bars=${bars}&user_id=${user_id}`, {
       cache: 'no-store', // Never use Next.js cached response — always fetch live from MT5
       headers: {
         'ngrok-skip-browser-warning': 'any-value'
@@ -38,7 +40,7 @@ export async function GET(request: Request) {
     })
   } catch (err: any) {
     // Generate realistic mock fallback when Python API is unreachable
-    console.warn(`[OHLCV API] Backend unreachable at ${PYTHON_API_URL}. Returning mock fallback data.`)
+    console.warn(`[OHLCV API] Backend unreachable at ${pythonApiUrl}. Returning mock fallback data.`)
 
     const data: any[] = []
     const now = Math.floor(Date.now() / 1000)

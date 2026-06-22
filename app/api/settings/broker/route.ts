@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 export async function GET() {
   const userId = await getCurrentUserId()
@@ -60,7 +60,8 @@ export async function PUT(req: NextRequest) {
   // Step 2: Call FastAPI to encrypt credentials and start the cloud bridge
   if (cloud_mode) {
     try {
-      const setupRes = await fetch(`${PYTHON_API_URL}/bridge/setup`, {
+      const pythonApiUrl = await getPythonApiUrl(userId)
+      const setupRes = await fetch(`${pythonApiUrl}/bridge/setup`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -84,7 +85,8 @@ export async function PUT(req: NextRequest) {
   } else {
     // Local mode: stop any cloud bridge, optionally notify local bridge
     try {
-      await fetch(`${PYTHON_API_URL}/bridge/stop/${userId}`, {
+      const pythonApiUrl = await getPythonApiUrl(userId)
+      await fetch(`${pythonApiUrl}/bridge/stop/${userId}`, {
         method: 'POST',
         headers: {
           'ngrok-skip-browser-warning': 'any-value'

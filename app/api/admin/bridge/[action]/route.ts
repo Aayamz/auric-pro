@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder-url.supabase.co'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'
@@ -51,22 +52,22 @@ export async function POST(
     return NextResponse.json({ error: 'Missing user_id' }, { status: 400 })
   }
 
-  const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+  const pythonApiUrl = await getPythonApiUrl(user_id)
 
   try {
     let res
     if (action === 'start') {
-      res = await fetch(`${PYTHON_API_URL}/bridge/start/${user_id}`, {
+      res = await fetch(`${pythonApiUrl}/bridge/start/${user_id}`, {
         method: 'POST',
         headers: { 'ngrok-skip-browser-warning': 'any-value' }
       })
     } else if (action === 'stop') {
-      res = await fetch(`${PYTHON_API_URL}/bridge/stop/${user_id}`, {
+      res = await fetch(`${pythonApiUrl}/bridge/stop/${user_id}`, {
         method: 'POST',
         headers: { 'ngrok-skip-browser-warning': 'any-value' }
       })
     } else if (action === 'sync') {
-      res = await fetch(`${PYTHON_API_URL}/bridge/sync/${user_id}`, {
+      res = await fetch(`${pythonApiUrl}/bridge/sync/${user_id}`, {
         method: 'POST',
         headers: { 'ngrok-skip-browser-warning': 'any-value' }
       })

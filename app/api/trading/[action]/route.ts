@@ -5,7 +5,7 @@ import { getCurrentUserId } from '@/lib/supabase-server'
 export const dynamic = 'force-dynamic'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 export async function POST(
   request: Request,
@@ -37,7 +37,8 @@ export async function POST(
     // Fallback to FastAPI backend when Redis is offline
     try {
       const endpoint = action === 'halt' ? 'stop' : action
-      const res = await fetch(`${PYTHON_API_URL}/trading/${endpoint}/${userId}`, {
+      const pythonApiUrl = await getPythonApiUrl(userId)
+      const res = await fetch(`${pythonApiUrl}/trading/${endpoint}/${userId}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -84,7 +85,8 @@ export async function GET(
   } catch (err: any) {
     // Fallback to FastAPI backend when Redis is offline
     try {
-      const res = await fetch(`${PYTHON_API_URL}/trading/status/${userId}`, {
+      const pythonApiUrl = await getPythonApiUrl(userId)
+      const res = await fetch(`${pythonApiUrl}/trading/status/${userId}`, {
         cache: 'no-store',
         headers: {
           'ngrok-skip-browser-warning': 'any-value'

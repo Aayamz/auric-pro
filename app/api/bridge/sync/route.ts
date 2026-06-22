@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUserId } from '@/lib/supabase-server'
 
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +18,8 @@ export async function POST() {
   }
 
   try {
-    const res = await fetch(`${PYTHON_API_URL}/bridge/sync/${userId}`, {
+    const pythonApiUrl = await getPythonApiUrl(userId)
+    const res = await fetch(`${pythonApiUrl}/bridge/sync/${userId}`, {
       method: 'POST',
       cache: 'no-store',
       headers: {

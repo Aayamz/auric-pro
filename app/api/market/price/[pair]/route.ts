@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+import { getCurrentUserId } from '@/lib/supabase-server'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 export async function GET(
   request: Request,
@@ -10,7 +10,9 @@ export async function GET(
   const pair = rawPair || 'XAUUSD'
 
   try {
-    const res = await fetch(`${PYTHON_API_URL}/price/${pair}`, {
+    const userId = await getCurrentUserId()
+    const pythonApiUrl = await getPythonApiUrl(userId || undefined)
+    const res = await fetch(`${pythonApiUrl}/price/${pair}`, {
       cache: 'no-store',
       headers: {
         'ngrok-skip-browser-warning': 'any-value'

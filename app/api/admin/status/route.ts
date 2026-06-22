@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder-url.supabase.co'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'
@@ -53,7 +54,6 @@ export async function GET() {
     const { data: brokers } = await supabase.from('broker_accounts').select('user_id, login, server, credentials_enc')
 
     const usersList: any[] = []
-    const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
     for (const b of (brokers || [])) {
       const sub = (subs || []).find(s => s.user_id === b.user_id)
@@ -61,7 +61,8 @@ export async function GET() {
       
       let bridgeStatus = { connected: false, balance: 10000.0, equity: 10000.0 }
       try {
-        const res = await fetch(`${PYTHON_API_URL}/bridge/status/${b.user_id}`, {
+        const pythonApiUrl = await getPythonApiUrl(b.user_id)
+        const res = await fetch(`${pythonApiUrl}/bridge/status/${b.user_id}`, {
           cache: 'no-store',
           headers: { 'ngrok-skip-browser-warning': 'any-value' }
         })

@@ -3,7 +3,7 @@ import { createClient } from 'redis'
 import { getSupabaseServerClient, getCurrentUserId } from '@/lib/supabase-server'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 async function callGemini(prompt: string, responseJson: boolean = false, maxTokens: number = 300): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY
@@ -52,7 +52,9 @@ export async function GET(
 
   if (feature === 'regime') {
     try {
-      const res = await fetch(`${PYTHON_API_URL}/regime`, {
+      const userId = await getCurrentUserId()
+      const pythonApiUrl = await getPythonApiUrl(userId || undefined)
+      const res = await fetch(`${pythonApiUrl}/regime`, {
         headers: { 'ngrok-skip-browser-warning': 'any-value' }
       })
       if (!res.ok) {
@@ -103,7 +105,8 @@ export async function GET(
       // Fetch regime from FastAPI
       let regime = 'ranging'
       try {
-        const regimeRes = await fetch(`${PYTHON_API_URL}/regime`, {
+        const pythonApiUrl = await getPythonApiUrl(userId)
+        const regimeRes = await fetch(`${pythonApiUrl}/regime`, {
           headers: { 'ngrok-skip-browser-warning': 'any-value' }
         })
         if (regimeRes.ok) {

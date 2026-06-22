@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUserId } from '@/lib/supabase-server'
+import { getPythonApiUrl } from '@/lib/api-helper'
 
 export const dynamic = 'force-dynamic'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379'
-const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000'
 
 // If the bridge last_seen timestamp is older than this, consider it disconnected
 const BRIDGE_STALE_THRESHOLD_MS = 12000 // 12 seconds (bridge updates every 2s when alive)
@@ -56,7 +56,8 @@ export async function GET() {
 
   // Fallback: call FastAPI directly
   try {
-    const res = await fetch(`${PYTHON_API_URL}/bridge/status/${userId}`, {
+    const pythonApiUrl = await getPythonApiUrl(userId)
+    const res = await fetch(`${pythonApiUrl}/bridge/status/${userId}`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(4000),
       headers: {
