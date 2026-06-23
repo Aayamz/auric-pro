@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase-server'
-import Anthropic from '@anthropic-ai/sdk'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'placeholder'
-})
+import { callGemini } from '@/lib/gemini'
 
 export async function GET(
   request: Request,
@@ -28,7 +24,7 @@ export async function GET(
     }
 
     // If AI explanation is missing, generate it lazily
-    if (!signal.ai_explanation && process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'placeholder') {
+    if (!signal.ai_explanation && process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'placeholder') {
       try {
         const prompt = `Explain this trading signal:
 Pair: ${signal.pair}
@@ -42,14 +38,7 @@ Indicators: ${JSON.stringify(signal.indicator_values)}
 
 Provide a professional, technical analysis in under 80 words explaining the market structure, the indicators backing it, and the risk/reward rationale.`
 
-        const message = await anthropic.messages.create({
-          model: 'claude-3-5-sonnet-20241022',
-          max_tokens: 150,
-          messages: [{ role: 'user', content: prompt }],
-        })
-
-        const rawText = message.content[0].type === 'text' ? message.content[0].text : ''
-        const explanation = rawText.trim()
+        const explanation = await callGemini(prompt, false, 150)
 
         // Cache it in Supabase
         await supabase
@@ -59,7 +48,7 @@ Provide a professional, technical analysis in under 80 words explaining the mark
 
         signal.ai_explanation = explanation
       } catch (aiErr) {
-        console.error("Claude call failed for signal explanation:", aiErr)
+        console.error("Gemini call failed for signal explanation:", aiErr)
       }
     }
 

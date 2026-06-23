@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'placeholder'
-})
+import { callGeminiChat } from '@/lib/gemini'
 
 export async function POST(request: Request) {
   try {
-    const { messages, context } = await request.json()
+    let { messages, message, context } = await request.json()
+
+    // Normalize messages to handle both single message and full messages array
+    if (!messages) {
+      if (message) {
+        messages = [{ role: 'user', content: message }]
+      } else {
+        return NextResponse.json({ error: 'No messages or message provided' }, { status: 400 })
+      }
+    }
+
     const activeStrategy = context?.activeStrategy || 'EMA Ribbon Crossover'
     const openPositionsCount = context?.openPositionsCount || 2
     const dailyPnl = context?.dailyPnl || -45.50
@@ -31,41 +37,15 @@ You have access to their trading data:
 
 You are a professional trading analyst. Be direct, precise, and concise (under 120 words unless asked for detail). Always give a clear directional view. Use $ for prices, R:R notation for risk:reward. If the user asks you to change a setting, respond with a JSON action block: {"action":"set_config","key":"risk_pct","value":0.5}`
 
-    // 1. If Anthropic API key is provided, stream using Anthropic SDK
-    if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'placeholder') {
-      const anthropicStream = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 400,
-        system: systemPrompt,
-        messages: messages.map((m: { role: string; content: string }) => ({ role: m.role, content: m.content })),
-        stream: true,
-      })
-
-      const encoder = new TextEncoder()
-      const customReadableStream = new ReadableStream({
-        async start(controller) {
-          for await (const chunk of anthropicStream) {
-            if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-              controller.enqueue(encoder.encode(chunk.delta.text))
-            }
-          }
-          controller.close()
-        }
-      })
-
-      return new Response(customReadableStream, {
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Transfer-Encoding': 'chunked'
-        }
-      })
+    if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'placeholder') {
+      const reply = await callGeminiChat(messages, systemPrompt, 400)
+      return NextResponse.json({ reply })
     }
 
-    // Reject mock fallback stream if Anthropic API key is not configured
-    return NextResponse.json({ error: 'Anthropic AI API key is not configured. Live AI advisor mode is required.' }, { status: 400 })
+    return NextResponse.json({ error: 'Google Gemini API key is not configured. Live AI advisor mode is required.' }, { status: 400 })
 
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Stream connection error'
+    const message = err instanceof Error ? err.message : 'Chat connection error'
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

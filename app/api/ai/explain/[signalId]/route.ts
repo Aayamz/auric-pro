@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase-server'
-import Anthropic from '@anthropic-ai/sdk'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'placeholder'
-})
+import { callGemini } from '@/lib/gemini'
 
 export async function POST(
   request: Request,
@@ -26,14 +22,9 @@ export async function POST(
       }
 
       let explanation = "Bullish swing structure mitigation on M15 demand blocks."
-      if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'placeholder') {
+      if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'placeholder') {
         const prompt = `Provide a concise (under 60 words) technical analyst review for this XAUUSD ${signal.direction} signal triggered via strategy ${signal.strategy}. Confidence is ${signal.confidence}%.`
-        const message = await anthropic.messages.create({
-          model: 'claude-3-5-sonnet-20241022',
-          max_tokens: 100,
-          messages: [{ role: 'user', content: prompt }]
-        })
-        explanation = (message.content[0].type === 'text' ? message.content[0].text : '').trim()
+        explanation = await callGemini(prompt, false, 100)
       }
 
       await supabase
@@ -43,8 +34,8 @@ export async function POST(
 
       return NextResponse.json({ explanation })
     }
-  } catch {
-    // Log error, continue to fallback
+  } catch (err) {
+    console.error("Gemini signal explain failed:", err)
   }
 
   return NextResponse.json({

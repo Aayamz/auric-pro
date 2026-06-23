@@ -1,24 +1,15 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'placeholder'
-})
+import { callGemini } from '@/lib/gemini'
 
 export async function GET() {
   try {
-    if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'placeholder') {
+    if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'placeholder') {
       const prompt = "Provide a single sentence of technical analyst commentary for gold (XAUUSD) based on current range-bound conditions. Keep it under 20 words."
-      const res = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 50,
-        messages: [{ role: 'user', content: prompt }]
-      })
-      const comment = (res.content[0].type === 'text' ? res.content[0].text : '').trim()
+      const comment = await callGemini(prompt, false, 50)
       return NextResponse.json({ commentary: [comment] })
     }
-  } catch {
-    // Fallback on error
+  } catch (err) {
+    console.error("Gemini commentary failed:", err)
   }
   
   return NextResponse.json({

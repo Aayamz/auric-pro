@@ -62,7 +62,12 @@ export default function AiAdvisorPage() {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, context, context_data: contextData })
+        body: JSON.stringify({
+          message: text,
+          messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })),
+          context,
+          context_data: contextData
+        })
       })
       const data = await res.json()
       // eslint-disable-next-line react-hooks/purity
@@ -112,7 +117,7 @@ export default function AiAdvisorPage() {
             </div>
             <div>
               <h3 className="font-sans text-body-sm font-semibold text-ink leading-none">AURIC AI</h3>
-              <span className="font-mono text-[9px] text-success uppercase">Online • Claude 3.5 Sonnet</span>
+              <span className="font-mono text-[9px] text-success uppercase">Online • Gemini 1.5 Flash</span>
             </div>
           </div>
           <div className="flex items-center gap-sm w-full sm:w-auto justify-between sm:justify-end">
