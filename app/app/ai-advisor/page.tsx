@@ -73,11 +73,13 @@ export default function AiAdvisorPage() {
         })
       })
       const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to get AI reply')
       // eslint-disable-next-line react-hooks/purity
-      const asstMsg: Message = { id: `asst-${++msgCounter}`, role: 'assistant', content: data.reply, ts: Date.now() }
+      const asstMsg: Message = { id: `asst-${++msgCounter}`, role: 'assistant', content: data.reply || 'No reply generated.', ts: Date.now() }
       setMessages(prev => [...prev, asstMsg])
-    } catch {
-      setMessages(prev => [...prev, { id: `err-${++msgCounter}`, role: 'assistant', content: 'An error occurred. Please try again.', ts: Date.now() }])
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'An error occurred. Please try again.'
+      setMessages(prev => [...prev, { id: `err-${++msgCounter}`, role: 'assistant', content: msg, ts: Date.now() }])
     } finally {
       setLoading(false)
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
@@ -98,6 +100,7 @@ export default function AiAdvisorPage() {
   const actions = quickActions.length > 0 ? quickActions : defaultActions
 
   const renderMessageContent = (content: string) => {
+    if (!content) return ''
     const parts = content.split(/(\*[^*]+\*|`[^`]+`|\n)/g)
     return parts.map((part, i) => {
       if (part.startsWith('*') && part.endsWith('*') && part.length > 2)

@@ -497,7 +497,7 @@ export default function SignalsPage() {
                 {loadingAi ? (
                   <div className="flex items-center gap-xs">
                     <span className="w-xxs h-xxs rounded-full bg-primary animate-ping" />
-                    <span>Claude formulating explanation...</span>
+                    <span>Gemini formulating explanation...</span>
                   </div>
                 ) : (
                   aiExplanation || "No analysis generated."
