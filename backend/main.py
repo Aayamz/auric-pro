@@ -489,23 +489,28 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                         "equity": equity
                     }
                     await broadcast_to_client(user_id, pos_data)
+                    margin = getattr(acc_info, "margin", 0.0) if acc_info else 0.0
+                    margin_used_pct = round((margin / equity) * 100, 2) if equity > 0 else 0.0
                     if redis_client:
                         status_data = {
                             "connected": True,
                             "last_seen": ist_now_iso(),
                             "balance": balance,
                             "equity": equity,
+                            "margin_used_pct": margin_used_pct,
                             "login": login if login else (acc_info.login if acc_info else None),
                             "server": server if server else (acc_info.server if acc_info else None),
                             "mock": False
                         }
                         try:
                             await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
+                            await redis_client.setex(f"positions:{user_id}", 30, json.dumps(data))
                         except Exception as e:
                             print(f"[DirectEngine] Redis setex error: {e}")
                     active_accounts[user_id] = {
                         "balance": balance,
                         "equity": equity,
+                        "margin_used_pct": margin_used_pct,
                         "last_seen": ist_now_iso()
                     }
                 else:
@@ -529,23 +534,28 @@ async def run_direct_mt5_loop(user_id: str, login: int, password: str, server: s
                         "equity": equity
                     }
                     await broadcast_to_client(user_id, pos_data)
+                    tot_volume = sum(p["volume"] for p in mock_pos)
+                    margin_used_pct = round(tot_volume * 10.0, 2)
                     if redis_client:
                         status_data = {
                             "connected": True,
                             "last_seen": ist_now_iso(),
                             "balance": balance,
                             "equity": equity,
+                            "margin_used_pct": margin_used_pct,
                             "login": login,
                             "server": server,
                             "mock": True
                         }
                         try:
                             await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
+                            await redis_client.setex(f"positions:{user_id}", 30, json.dumps(mock_pos))
                         except Exception as e:
                             print(f"[DirectEngine] Redis setex error: {e}")
                     active_accounts[user_id] = {
                         "balance": balance,
                         "equity": equity,
+                        "margin_used_pct": margin_used_pct,
                         "last_seen": ist_now_iso()
                     }
 
@@ -1269,9 +1279,14 @@ async def bridge_endpoint(websocket: WebSocket):
                 prev_tickets = prev_info.get("tickets", set())
                 curr_tickets = {p.get("ticket") for p in data.get("data", []) if p.get("ticket")}
                 
+                margin = data.get("margin", 0.0)
+                equity = data.get("equity", 10000.00)
+                margin_used_pct = round((margin / equity) * 100, 2) if equity > 0 else 0.0
+                
                 active_accounts[user_id] = {
                     "balance": data.get("balance", 10000.00),
-                    "equity": data.get("equity", 10000.00),
+                    "equity": equity,
+                    "margin_used_pct": margin_used_pct,
                     "last_seen": ist_now_iso(),
                     "tickets": curr_tickets
                 }
@@ -1311,14 +1326,19 @@ async def bridge_endpoint(websocket: WebSocket):
                 
                 # Set status in Redis only for positions/connection updates
                 if data.get("type") == "positions":
+                    margin = data.get("margin", 0.0)
+                    equity = data.get("equity", 10000.00)
+                    margin_used_pct = round((margin / equity) * 100, 2) if equity > 0 else 0.0
                     status_data = {
                         "connected": True,
                         "last_seen": ist_now_iso(),
                         "balance": data.get("balance", 10000.00),
-                        "equity": data.get("equity", 10000.00)
+                        "equity": equity,
+                        "margin_used_pct": margin_used_pct
                     }
                     try:
                         await redis_client.setex(f"bridge:status:{user_id}", 10, json.dumps(status_data))
+                        await redis_client.setex(f"positions:{user_id}", 30, json.dumps(data.get("data", [])))
                     except Exception as e:
                         print(f"[Bridge] Redis status setex error: {e}")
 
@@ -1921,6 +1941,7 @@ async def get_bridge_status(user_id: str):
     info = active_accounts.get(user_id, {
         "balance": 0,
         "equity": 0,
+        "margin_used_pct": 0,
         "last_seen": ist_now_iso()
     })
     return {
@@ -1930,7 +1951,8 @@ async def get_bridge_status(user_id: str):
         "server": active_server,
         "last_seen": info.get("last_seen"),
         "balance": info.get("balance"),
-        "equity": info.get("equity")
+        "equity": info.get("equity"),
+        "margin_used_pct": info.get("margin_used_pct", 0)
     }
 
 

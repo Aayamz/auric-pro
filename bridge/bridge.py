@@ -336,12 +336,14 @@ async def real_position_stream(ws):
         acc_info = mt5.account_info()
         balance = acc_info.balance if acc_info else 10000.00
         equity = acc_info.equity if acc_info else 10000.00
+        margin = getattr(acc_info, "margin", 0.0) if acc_info else 0.0
 
         await ws.send(json.dumps({
             "type": "positions",
             "data": data,
             "balance": balance,
-            "equity": equity
+            "equity": equity,
+            "margin": margin
         }))
         await asyncio.sleep(2.0)
 

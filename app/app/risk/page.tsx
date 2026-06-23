@@ -116,11 +116,15 @@ export default function RiskPage() {
             <div className="grid grid-cols-2 gap-sm w-full mt-md text-center">
               <div className="bg-canvas-soft-2 rounded-sm p-xs border border-hairline">
                 <span className="font-mono text-[9px] text-mute uppercase block">Daily P&L</span>
-                <span className="font-mono text-caption-mono font-semibold text-error">${(exposure?.daily_pnl ?? -45.5).toFixed(2)}</span>
+                <span className={`font-mono text-caption-mono font-semibold ${(exposure?.daily_pnl ?? 0) < 0 ? 'text-error' : 'text-success'}`}>
+                  {(exposure?.daily_pnl ?? 0) < 0 ? '-' : '+'}${(Math.abs(exposure?.daily_pnl ?? 0)).toFixed(2)}
+                </span>
               </div>
               <div className="bg-canvas-soft-2 rounded-sm p-xs border border-hairline">
                 <span className="font-mono text-[9px] text-mute uppercase block">Drawdown</span>
-                <span className="font-mono text-caption-mono font-semibold text-warning">{(exposure?.drawdown ?? 2.45).toFixed(2)}%</span>
+                <span className={`font-mono text-caption-mono font-semibold ${(exposure?.drawdown ?? 0) > 0 ? 'text-warning' : 'text-mute'}`}>
+                  {(exposure?.drawdown ?? 0).toFixed(2)}%
+                </span>
               </div>
             </div>
           </div>
