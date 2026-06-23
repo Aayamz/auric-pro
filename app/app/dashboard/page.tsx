@@ -46,6 +46,10 @@ export default function DashboardPage() {
   const queryClient = useQueryClient()
 
   const lastBarRef = useRef<{ time: Time; open: number; high: number; low: number; close: number; volume: number } | null>(null)
+  const pricesRef = useRef(prices)
+  useEffect(() => {
+    pricesRef.current = prices
+  }, [prices])
 
   // Fetch OHLCV data — force-dynamic, no caching
   const { data: ohlcvData, refetch: refetchOhlcv } = useQuery({
@@ -183,7 +187,7 @@ export default function DashboardPage() {
     // Shift ALL candles so they are anchored at the live price instead of
     // rendering them off-screen at the wrong level.
     let chartData = ohlcvData
-    const livePrice = prices[selectedPair]
+    const livePrice = pricesRef.current[selectedPair]
     if (livePrice?.bid && ohlcvData.length > 0) {
       const lastBar = ohlcvData[ohlcvData.length - 1]
       const deviationPct = lastBar.close > 0 ? Math.abs(livePrice.bid - lastBar.close) / lastBar.close : 0
@@ -298,7 +302,7 @@ export default function DashboardPage() {
       markersRef.current.setMarkers(markers)
     }
 
-  }, [ohlcvData, chartOverlays, positions, selectedPair, prices])
+  }, [ohlcvData, chartOverlays, positions, selectedPair])
 
   // Real-time last-bar update from live price ticks
   // This makes the chart feel live even between OHLCV refetch intervals

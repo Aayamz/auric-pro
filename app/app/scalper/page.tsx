@@ -32,6 +32,11 @@ function ScalperContent() {
   const ask = xauPrice?.ask ?? 1950.50
   const spread = xauPrice?.spread ?? 0.50
 
+  const xauPriceRef = useRef(xauPrice)
+  useEffect(() => {
+    xauPriceRef.current = xauPrice
+  }, [xauPrice])
+
   const isBridgeConnected = bridgeStatus === 'connected'
 
   // ATR calculation from OHLCV data (14-period)
@@ -133,11 +138,12 @@ function ScalperContent() {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
       // If live price is far from OHLCV data, shift all candles to the live price
       let chartData = ohlcvData
-      if (xauPrice?.bid && ohlcvData.length > 0) {
+      const currentXauPrice = xauPriceRef.current
+      if (currentXauPrice?.bid && ohlcvData.length > 0) {
         const lastBar = ohlcvData[ohlcvData.length - 1]
-        const deviationPct = lastBar.close > 0 ? Math.abs(xauPrice.bid - lastBar.close) / lastBar.close : 0
+        const deviationPct = lastBar.close > 0 ? Math.abs(currentXauPrice.bid - lastBar.close) / lastBar.close : 0
         if (deviationPct > 0.02) {
-          const offset = xauPrice.bid - lastBar.close
+          const offset = currentXauPrice.bid - lastBar.close
           chartData = ohlcvData.map(bar => ({
             ...bar,
             open: +(bar.open + offset).toFixed(2),
@@ -150,7 +156,7 @@ function ScalperContent() {
       candleSeriesRef.current.setData(chartData)
       lastBarRef.current = { ...chartData[chartData.length - 1], time: chartData[chartData.length - 1].time as Time }
     }
-  }, [ohlcvData, xauPrice])
+  }, [ohlcvData])
 
   // Real-time last-bar update from live bid price
   useEffect(() => {

@@ -168,52 +168,61 @@ def fetch_real_ohlcv(pair, tf, bars):
 
 def generate_mock_ohlcv(pair, tf, bars):
     import time
-    now_ms = int(time.time() * 1000)
+    now_sec = int(time.time())
     tf_minutes = 15
     if tf == "M1": tf_minutes = 1
     elif tf == "M5": tf_minutes = 5
+    elif tf == "M15": tf_minutes = 15
     elif tf == "H1": tf_minutes = 60
     elif tf == "H4": tf_minutes = 240
-    
-    base_price = 1950.0
-    if MT5_AVAILABLE:
-        try:
-            if mt5.initialize():
-                resolved = resolve_mt5_symbol(pair)
-                tick = mt5.symbol_info_tick(resolved)
-                if tick:
-                    base_price = tick.bid
-                else:
-                    rates = mt5.copy_rates_from_pos(resolved, mt5.TIMEFRAME_M15, 0, 1)
-                    if rates is not None and len(rates) > 0:
-                        base_price = float(rates[0][4])
-        except Exception:
-            pass
-            
-    if base_price == 1950.0:
-        if "EURUSD" in pair: base_price = 1.0850
-        elif "GBPUSD" in pair: base_price = 1.2650
-        elif "USDJPY" in pair: base_price = 151.50
-    
-    data = []
+    elif tf == "D1": tf_minutes = 1440
+
+    tf_seconds = tf_minutes * 60
+
+    latest_bar_time = (now_sec // tf_seconds) * tf_seconds
+    start_time = latest_bar_time - (bars - 1) * tf_seconds
+
+    base_price = 3320.00
+    if "EURUSD" in pair: base_price = 1.0850
+    elif "GBPUSD" in pair: base_price = 1.2650
+    elif "USDJPY" in pair: base_price = 151.50
+
+    import hashlib
+    def get_deterministic_val(salt: str, t: int) -> float:
+        salt_str = f"{pair}-{t}-{salt}"
+        h = hashlib.sha256(salt_str.encode('utf-8')).hexdigest()
+        val = int(h[:8], 16) / 4294967295.0
+        return val
+
     current_price = base_price
-    for i in range(bars - 1, -1, -1):
-        t = now_ms - (bars - 1 - i) * tf_minutes * 60 * 1000
-        c = current_price
-        o = c - random.uniform(-3, 3)
-        h = max(o, c) + random.uniform(0, 1.5)
-        l = min(o, c) - random.uniform(0, 1.5)
-        v = random.randint(100, 5000)
+    decimals = 2 if "JPY" in pair or "XAU" in pair else 5
+
+    data = []
+    for i in range(bars):
+        t = start_time + i * tf_seconds
+        o = current_price
+        
+        rand_change = get_deterministic_val("change", t)
+        change = (rand_change - 0.5) * (base_price * 0.002)
+        c = o + change
+        
+        rand_high = get_deterministic_val("high", t)
+        rand_low = get_deterministic_val("low", t)
+        
+        h = max(o, c) + rand_high * (base_price * 0.001)
+        l = min(o, c) - rand_low * (base_price * 0.001)
+        v = int(100 + get_deterministic_val("volume", t) * 4900)
+        
         data.append({
-            "time": t // 1000,
-            "open": round(o, 2),
-            "high": round(h, 2),
-            "low": round(l, 2),
-            "close": round(c, 2),
+            "time": t,
+            "open": round(o, decimals),
+            "high": round(h, decimals),
+            "low": round(l, decimals),
+            "close": round(c, decimals),
             "volume": v
         })
-        current_price = o
-    data.reverse()
+        current_price = c
+
     return data
 
 # Mock State for non-Windows or Mock verification

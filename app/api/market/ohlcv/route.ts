@@ -40,10 +40,8 @@ export async function GET(request: Request) {
     })
   } catch (err: any) {
     // Generate realistic mock fallback when Python API is unreachable
-    console.warn(`[OHLCV API] Backend unreachable at ${pythonApiUrl}. Returning mock fallback data.`)
-
     const data: any[] = []
-    const now = Math.floor(Date.now() / 1000)
+    const nowSec = Math.floor(Date.now() / 1000)
     let tfSeconds = 900 // default: M15
     if (tf === 'M1') tfSeconds = 60
     else if (tf === 'M5') tfSeconds = 300
@@ -51,22 +49,40 @@ export async function GET(request: Request) {
     else if (tf === 'H4') tfSeconds = 14400
     else if (tf === 'D1') tfSeconds = 86400
 
+    const latestBarTime = Math.floor(nowSec / tfSeconds) * tfSeconds
+    const startTime = latestBarTime - (bars - 1) * tfSeconds
+
     // Use realistic current market prices — XAUUSD is ~3300, not the old 1950 hardcode
     let basePrice = 3320.00
     if (pair.includes('EURUSD')) basePrice = 1.0850
     else if (pair.includes('GBPUSD')) basePrice = 1.2650
     else if (pair.includes('USDJPY')) basePrice = 151.50
 
+    // Deterministic pseudo-random number generator based on time and pair
+    const getDeterministicValue = (salt: string, t: number) => {
+      const str = `${pair}-${t}-${salt}`
+      let hash = 0
+      for (let j = 0; j < str.length; j++) {
+        hash = str.charCodeAt(j) + ((hash << 5) - hash)
+      }
+      const x = Math.sin(hash) * 10000
+      return x - Math.floor(x)
+    }
+
     let currentPrice = basePrice
-    for (let i = bars - 1; i >= 0; i--) {
-      const time = now - i * tfSeconds
-      const close = currentPrice
-      const change = (Math.random() - 0.5) * (basePrice * 0.003)
-      const open = close - change
-      const high = Math.max(open, close) + Math.random() * (basePrice * 0.001)
-      const low = Math.min(open, close) - Math.random() * (basePrice * 0.001)
-      const volume = Math.floor(Math.random() * 5000) + 100
-      const decimals = pair.includes('JPY') || pair.includes('XAU') ? 2 : 5
+    const decimals = pair.includes('JPY') || pair.includes('XAU') ? 2 : 5
+
+    for (let i = 0; i < bars; i++) {
+      const time = startTime + i * tfSeconds
+      const open = currentPrice
+      const randChange = getDeterministicValue('change', time)
+      const change = (randChange - 0.5) * (basePrice * 0.002)
+      const close = open + change
+      const randHigh = getDeterministicValue('high', time)
+      const randLow = getDeterministicValue('low', time)
+      const high = Math.max(open, close) + randHigh * (basePrice * 0.001)
+      const low = Math.min(open, close) - randLow * (basePrice * 0.001)
+      const volume = Math.floor(getDeterministicValue('volume', time) * 5000) + 100
 
       data.push({
         time,
@@ -76,7 +92,7 @@ export async function GET(request: Request) {
         close: Number(close.toFixed(decimals)),
         volume
       })
-      currentPrice = open
+      currentPrice = close
     }
 
     return NextResponse.json(data)
