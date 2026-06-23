@@ -23,7 +23,7 @@ export async function POST(
 
       let explanation = "Bullish swing structure mitigation on M15 demand blocks."
       if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'placeholder') {
-        const prompt = `Provide a concise (under 60 words) technical analyst review for this XAUUSD ${signal.direction} signal triggered via strategy ${signal.strategy}. Confidence is ${signal.confidence}%.`
+        const prompt = `Provide a concise (under 60 words) technical analyst review for this ${signal.pair} ${signal.direction} signal triggered via strategy ${signal.strategy}. Confidence is ${signal.confidence}%.`
         explanation = await callGemini(prompt, false, 100)
       }
 

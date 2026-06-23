@@ -32,7 +32,7 @@ export async function callGemini(
     throw new Error('Gemini API key is not configured')
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
   const payload: GeminiPayload = {
     contents: [{
       parts: [{ text: prompt }]
@@ -75,7 +75,7 @@ export async function callGeminiChat(
     throw new Error('Gemini API key is not configured')
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
 
   // Map messages to Gemini's user/model role expectations
   const contents: GeminiContent[] = messages.map(m => ({

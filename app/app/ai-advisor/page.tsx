@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Send, Bot, User, Brain, Loader2 } from 'lucide-react'
 import { formatISTTime } from '@/lib/time'
+import { useStore } from '@/store'
 
 interface Message { id: string; role: 'user' | 'assistant'; content: string; ts: number }
 
@@ -29,10 +30,12 @@ export default function AiAdvisorPage() {
     }])
   }, [])
 
+  const { selectedPair } = useStore()
+
   const { data: contextData } = useQuery({
-    queryKey: ['ai-context'],
+    queryKey: ['ai-context', selectedPair],
     queryFn: async () => {
-      const res = await fetch('/api/ai/context')
+      const res = await fetch(`/api/ai/context?selectedPair=${selectedPair}`)
       return res.json()
     }
   })
@@ -117,7 +120,7 @@ export default function AiAdvisorPage() {
             </div>
             <div>
               <h3 className="font-sans text-body-sm font-semibold text-ink leading-none">AURIC AI</h3>
-              <span className="font-mono text-[9px] text-success uppercase">Online • Gemini 1.5 Flash</span>
+              <span className="font-mono text-[9px] text-success uppercase">Online • Gemini 2.5 Flash</span>
             </div>
           </div>
           <div className="flex items-center gap-sm w-full sm:w-auto justify-between sm:justify-end">

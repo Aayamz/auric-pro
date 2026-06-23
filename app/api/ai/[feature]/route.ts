@@ -77,8 +77,12 @@ export async function GET(
         }
       } catch {}
 
+      // Get selectedPair from query parameters
+      const { searchParams } = new URL(request.url)
+      const selectedPair = searchParams.get('selectedPair') || 'XAUUSD'
+
       return NextResponse.json({
-        selectedPair: 'XAUUSD',
+        selectedPair,
         activeStrategy: 'ema_crossover',
         openPositionsCount,
         dailyPnl,

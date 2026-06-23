@@ -16,7 +16,7 @@ function ScalperContent() {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const lastBarRef = useRef<{ time: Time; open: number; high: number; low: number; close: number; volume: number } | null>(null)
 
-  const { prices, positions, bridgeStatus, theme, user, botRunning, setBotRunning } = useStore()
+  const { prices, positions, bridgeStatus, theme, user, botRunning, setBotRunning, selectedPair } = useStore()
   const { openTrade, closeTrade } = useLiveData()
   const { addToast } = useToast()
 
@@ -27,15 +27,15 @@ function ScalperContent() {
   const [buyLoading, setBuyLoading] = useState(false)
   const [sellLoading, setSellLoading] = useState(false)
 
-  const xauPrice = prices['XAUUSD']
-  const bid = xauPrice?.bid ?? 1950.00
-  const ask = xauPrice?.ask ?? 1950.50
-  const spread = xauPrice?.spread ?? 0.50
+  const activePrice = prices[selectedPair]
+  const bid = activePrice?.bid ?? 1950.00
+  const ask = activePrice?.ask ?? 1950.50
+  const spread = activePrice?.spread ?? 0.50
 
-  const xauPriceRef = useRef(xauPrice)
+  const activePriceRef = useRef(activePrice)
   useEffect(() => {
-    xauPriceRef.current = xauPrice
-  }, [xauPrice])
+    activePriceRef.current = activePrice
+  }, [activePrice])
 
   const isBridgeConnected = bridgeStatus === 'connected'
 
@@ -53,16 +53,16 @@ function ScalperContent() {
   })()
 
   const { data: ohlcvData } = useQuery({
-    queryKey: ['ohlcv-m1', user?.id],
+    queryKey: ['ohlcv-m1', user?.id, selectedPair],
     queryFn: async () => {
       try {
         const apiBase = getBaseApiUrl()
-        const res = await fetch(`${apiBase}/ohlcv?pair=XAUUSD&tf=M1&bars=200&user_id=${user?.id || ''}`)
+        const res = await fetch(`${apiBase}/ohlcv?pair=${selectedPair}&tf=M1&bars=200&user_id=${user?.id || ''}`)
         if (!res.ok) throw new Error('Failed to fetch from local API')
         return await res.json()
       } catch (err) {
         console.warn('[Scalper] Local API unreachable. Falling back to Vercel API proxy.', err)
-        const res = await fetch(`/api/market/ohlcv?pair=XAUUSD&tf=M1&bars=200&user_id=${user?.id || ''}`)
+        const res = await fetch(`/api/market/ohlcv?pair=${selectedPair}&tf=M1&bars=200&user_id=${user?.id || ''}`)
         if (!res.ok) {
           throw new Error('Failed to fetch live market data')
         }
@@ -138,12 +138,12 @@ function ScalperContent() {
     if (candleSeriesRef.current && Array.isArray(ohlcvData) && ohlcvData.length > 0) {
       // If live price is far from OHLCV data, shift all candles to the live price
       let chartData = ohlcvData
-      const currentXauPrice = xauPriceRef.current
-      if (currentXauPrice?.bid && ohlcvData.length > 0) {
+      const currentActivePrice = activePriceRef.current
+      if (currentActivePrice?.bid && ohlcvData.length > 0) {
         const lastBar = ohlcvData[ohlcvData.length - 1]
-        const deviationPct = lastBar.close > 0 ? Math.abs(currentXauPrice.bid - lastBar.close) / lastBar.close : 0
+        const deviationPct = lastBar.close > 0 ? Math.abs(currentActivePrice.bid - lastBar.close) / lastBar.close : 0
         if (deviationPct > 0.02) {
-          const offset = currentXauPrice.bid - lastBar.close
+          const offset = currentActivePrice.bid - lastBar.close
           chartData = ohlcvData.map(bar => ({
             ...bar,
             open: +(bar.open + offset).toFixed(2),
@@ -157,11 +157,11 @@ function ScalperContent() {
       lastBarRef.current = { ...chartData[chartData.length - 1], time: chartData[chartData.length - 1].time as Time }
     }
   }, [ohlcvData])
-
+ 
   // Real-time last-bar update from live bid price
   useEffect(() => {
     if (!candleSeriesRef.current || !lastBarRef.current) return
-    const livePrice = xauPrice
+    const livePrice = activePrice
     if (!livePrice || !livePrice.bid) return
     const liveBid = livePrice.bid
     const bar = lastBarRef.current
@@ -194,7 +194,7 @@ function ScalperContent() {
     try {
       candleSeriesRef.current.update(updated)
     } catch (e) {}
-  }, [xauPrice])
+  }, [activePrice])
 
   // Compute ATR(14) from OHLCV whenever data changes
   useEffect(() => {
@@ -235,13 +235,13 @@ function ScalperContent() {
     const tp = direction === 'BUY' ? bid + tpPips * 0.1 : ask - tpPips * 0.1
 
     try {
-      const result = await openTrade({ pair: 'XAUUSD', direction, lots, sl, tp })
+      const result = await openTrade({ pair: selectedPair, direction, lots, sl, tp })
       addToast({
         type: 'success',
         title: `${direction} Order Sent`,
         message: result.ticket
           ? `Ticket #${result.ticket} opened at ${result.open_price ?? (direction === 'BUY' ? ask : bid).toFixed(2)}`
-          : result.message || `${lots}L XAUUSD ${direction} order submitted to MT5`,
+          : result.message || `${lots}L ${selectedPair} ${direction} order submitted to MT5`,
         duration: 5000
       })
     } catch (err: any) {
@@ -254,7 +254,7 @@ function ScalperContent() {
     } finally {
       setLoading(false)
     }
-  }, [isBridgeConnected, bid, ask, slPips, tpPips, lots, openTrade, addToast])
+  }, [isBridgeConnected, bid, ask, slPips, tpPips, lots, openTrade, addToast, selectedPair])
 
   const handleBuy = useCallback(() => executeTrade('BUY'), [executeTrade])
   const handleSell = useCallback(() => executeTrade('SELL'), [executeTrade])
@@ -297,7 +297,7 @@ function ScalperContent() {
       {/* Top bar */}
       <div className="h-[48px] border-b border-hairline flex items-center justify-between px-lg shrink-0">
         <span className="font-sans text-body-sm font-semibold text-ink/80">
-          AURIC PRO — <span className="text-[#f5a623]">SCALPER MODE</span>
+          AURIC PRO — <span className="text-[#f5a623]">SCALPER MODE ({selectedPair})</span>
         </span>
         <div className="flex items-center gap-sm">
           <span className={`w-xxs h-xxs rounded-full inline-block ${isBridgeConnected ? 'bg-success animate-pulse' : 'bg-error animate-pulse'}`} />
@@ -326,7 +326,7 @@ function ScalperContent() {
         {/* Left — Live Price Feed */}
         <div className="w-full lg:w-[200px] border-b lg:border-b-0 lg:border-r border-hairline flex flex-row lg:flex-col p-md gap-md justify-between lg:justify-start shrink-0 items-center lg:items-stretch bg-canvas-soft">
           <div>
-            <span className="font-mono text-[9px] text-mute uppercase tracking-widest block mb-xxs">XAUUSD</span>
+            <span className="font-mono text-[9px] text-mute uppercase tracking-widest block mb-xxs">{selectedPair}</span>
             <div className="font-mono text-display-lg font-semibold text-ink leading-none">
               {bid.toFixed(2)}
             </div>
